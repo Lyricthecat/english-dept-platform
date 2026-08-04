@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>初中英语科组工作平台</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ============ 侧边导航 ============ -->
+<aside class="sidebar" id="sidebar">
+  <div class="brand">
+    <div class="brand-logo">📘</div>
+    <div class="brand-text">
+      <h1>初中英语科组</h1>
+      <p>工作平台 <span class="ver">v1.0</span></p>
+    </div>
+  </div>
+  <nav class="nav">
+    <button class="nav-item active" data-tab="plans"><span class="nav-ico">📋</span>工作计划</button>
+    <button class="nav-item" data-tab="students"><span class="nav-ico">👥</span>学生管理</button>
+    <button class="nav-item" data-tab="grades"><span class="nav-ico">📊</span>成绩管理</button>
+    <button class="nav-item" data-tab="materials"><span class="nav-ico">📁</span>资料管理</button>
+    <button class="nav-item" data-tab="settings"><span class="nav-ico">⚙️</span>设置</button>
+  </nav>
+  <div class="side-foot">
+    <div class="save-status" id="saveStatus">💾 数据已自动保存</div>
+    <div class="save-time" id="saveTime"></div>
+    <div class="save-size" id="lsUsage"></div>
+  </div>
+</aside>
+
+<!-- ============ 主内容区 ============ -->
+<main class="main">
+
+  <!-- 工作计划 -->
+  <section class="tab-page" id="page-plans">
+    <div class="page-head">
+      <div>
+        <h2>📋 工作计划</h2>
+        <p class="sub">制定英语科组每周工作计划 · 确定每周授课进度 · 一键生成表格</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn btn-ghost" id="planBtnCopy"><span>⤵</span> 复制到下周</button>
+        <button class="btn btn-primary" id="planBtnGen"><span>📄</span> 一键生成表格</button>
+      </div>
+    </div>
+    <div id="planView" class="view-wrap"></div>
+  </section>
+
+  <!-- 学生管理 -->
+  <section class="tab-page" id="page-students" hidden>
+    <div class="page-head">
+      <div>
+        <h2>👥 学生管理</h2>
+        <p class="sub">15 个班的班级档案 · 学生名单管理 · 一键搜索学生</p>
+      </div>
+      <div class="head-actions">
+        <div class="search-box big">
+          <input type="search" id="stuSearchInput" placeholder="输入学生姓名或学号，一键搜索…">
+          <button class="btn btn-primary" id="stuSearchBtn">🔍 搜索</button>
+        </div>
+      </div>
+    </div>
+    <div id="stuSummary" class="stat-strip"></div>
+    <div id="studentsView" class="view-wrap"></div>
+  </section>
+
+  <!-- 成绩管理 -->
+  <section class="tab-page" id="page-grades" hidden>
+    <div class="page-head">
+      <div>
+        <h2>📊 成绩管理</h2>
+        <p class="sub">新建考试 · 分班导入成绩 · 一键比对分析 · 可视化图表</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn btn-primary" id="examBtnNew"><span>➕</span> 新建考试</button>
+      </div>
+    </div>
+    <div id="gradesView" class="view-wrap"></div>
+  </section>
+
+  <!-- 资料管理 -->
+  <section class="tab-page" id="page-materials" hidden>
+    <div class="page-head">
+      <div>
+        <h2>📁 资料管理</h2>
+        <p class="sub">课件 · 教案 · 试卷 · 练习题 · 默写卷 · 背诵资料 · 成绩</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn btn-ghost" id="matBtnBind"><span>🗂</span> 绑定资料文件夹</button>
+        <button class="btn btn-primary" id="matBtnUpload"><span>⬆</span> 上传资料</button>
+      </div>
+    </div>
+    <div id="matStorageTip" class="tip-bar"></div>
+    <div id="materialsView" class="view-wrap"></div>
+  </section>
+
+  <!-- 设置 -->
+  <section class="tab-page" id="page-settings" hidden>
+    <div class="page-head">
+      <div>
+        <h2>⚙️ 设置</h2>
+        <p class="sub">系统设置 · 数据导入导出 · 备份与恢复</p>
+      </div>
+    </div>
+    <div id="settingsView" class="view-wrap"></div>
+  </section>
+
+</main>
+
+<!-- ============ 通用弹窗 ============ -->
+<div class="modal-mask" id="modalMask" hidden>
+  <div class="modal" id="modalBox">
+    <div class="modal-head">
+      <h3 id="modalTitle"></h3>
+      <button class="modal-x" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+
+<!-- ============ 打印区域（一键生成表格） ============ -->
+<div id="printArea" class="print-area"></div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="lib/chart.umd.js"></script>
+<script src="lib/chartjs-chart-boxplot.umd.min.js"></script>
+<script src="lib/xlsx.full.min.js"></script>
+<script src="lib/jspdf.umd.min.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/store.js"></script>
+<script src="js/plan.js"></script>
+<script src="js/students.js"></script>
+<script src="js/grades.js"></script>
+<script src="js/materials.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
