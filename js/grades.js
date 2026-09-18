@@ -833,32 +833,58 @@
       const thr = this.thresholds();
       const allIds = ex.classIds;
       const selIds = this.anClasses ? allIds.filter(id => this.anClasses.has(id)) : allIds;
-      const keys = [...App.ITEM_KEYS, 'total'];
-      const keyLabel = k => k === 'total' ? '总分' : App.itemLabel(k);
+      const full = App.fullTotal(ex.fullMarks);
+      const clsName = cid => (DB().getClass(cid) || { name: cid + '班' }).name;
 
-      // 各班统计（全部班级，指标切换时用）
+      // 各班统计（全部班级）
       const statsMap = {};
       allIds.forEach(cid => { statsMap[cid] = this.computeClassStats((ex.scores || {})[cid] || [], ex.fullMarks, thr); });
-
-      // —— 综合对比表 ——
-      const metric = this.anMetric;
-      const headerRow = `<tr><th>班级</th>${keys.map(k => `<th class="num">${keyLabel(k)}</th>`).join('')}</tr>`;
-      const bodyRows = allIds.map(cid => {
-        const cls = DB().getClass(cid);
-        return `<tr><td><b>${App.esc(cls ? cls.name : cid + '班')}</b></td>${keys.map(k => `<td class="num">${this.metricVal(statsMap[cid][k], metric)}</td>`).join('')}</tr>`;
-      }).join('');
-      // 年级汇总行
       const allRecs = [];
       allIds.forEach(cid => allRecs.push(...((ex.scores || {})[cid] || [])));
       const gradeStats = this.computeClassStats(allRecs, ex.fullMarks, thr);
 
-      const metricChips = ['avg', 'max', 'min', 'range', 'median', 'passRate', 'goodRate', 'lowRate', 'rate'].map(m =>
-        `<button class="chip ${m === metric ? 'on' : ''}" data-metric="${m}">${this.metricName(m)}</button>`).join('');
-      const classChips = allIds.map(cid => {
-        const cls = DB().getClass(cid);
-        return `<button class="chip ${selIds.includes(cid) ? 'on' : ''}" data-cls="${cid}">${App.esc(cls ? cls.name : cid + '班')}</button>`;
-      }).join('');
-      // 试卷质量分析表（全年级）
+      // 五数概括（箱线图数据）
+      const boxOf = recs => App.boxplotData(recs.map(r => App.num(r.total)).filter(v => v != null));
+      const boxMap = {};
+      allIds.forEach(cid => { boxMap[cid] = boxOf((ex.scores || {})[cid] || []); });
+      const gradeBox = boxOf(allRecs);
+
+      const td = (x, bold) => `<td class="num">${bold ? '<b>' + x + '</b>' : x}</td>`;
+      const tr = (cells, bold) => `<tr${bold ? ' class="row-good"' : ''}>${cells}</tr>`;
+      const nameCell = (label, bold) => `<td>${bold ? '🏆 ' : ''}<b>${App.esc(label)}</b></td>`;
+
+      // —— 表格 A：各班成绩总览 ——
+      const headA = '<tr><th>班级</th><th class="num">参考人数</th><th class="num">平均分</th><th class="num">最高分</th><th class="num">最低分</th><th class="num">中位数</th><th class="num">班内分差</th><th class="num">优秀率</th><th class="num">及格率</th><th class="num">低分率</th><th class="num">得分率</th></tr>';
+      const rowA = (st, label, bold) => tr(nameCell(label, bold) +
+        td(st.count, bold) + td(App.fmt(st.avg), bold) + td(st.max != null ? st.max : '—', bold) + td(st.min != null ? st.min : '—', bold) +
+        td(App.fmt(st.median), bold) + td(App.fmt(st.range), bold) + td(App.fmtPct(st.goodRate), bold) + td(App.fmtPct(st.passRate), bold) +
+        td(App.fmtPct(st.lowRate), bold) + td(App.fmtPct(st.rate), bold), bold);
+      const rowsA = allIds.map(cid => rowA(statsMap[cid].total, clsName(cid), false)).join('') + rowA(gradeStats.total, '全年级', true);
+
+      // —— 表格 B：各班各题型得分率（%）——
+      const headB = '<tr><th>班级</th>' + [...App.ITEMS.map(i => `<th class="num">${i.label}</th>`), '<th class="num">总分</th>'].join('') + '</tr>';
+      const rowB = (st, label, bold) => tr(nameCell(label, bold) +
+        [...App.ITEM_KEYS.map(k => td(App.fmtPct(st[k].rate), bold)), td(App.fmtPct(st.total.rate), bold)].join(''), bold);
+      const rowsB = allIds.map(cid => rowB(statsMap[cid], clsName(cid), false)).join('') + rowB(gradeStats, '全年级', true);
+
+      // —— 表格 C：各班总分分布（五数概括）——
+      const headC = '<tr><th>班级</th><th class="num">最低分</th><th class="num">下四分位 Q1</th><th class="num">中位数</th><th class="num">上四分位 Q3</th><th class="num">最高分</th><th class="num">离群人数</th></tr>';
+      const rowC = (b, label, bold) => tr(nameCell(label, bold) +
+        td(b ? App.fmt(b.min) : '—', bold) + td(b ? App.fmt(b.q1) : '—', bold) + td(b ? App.fmt(b.median) : '—', bold) +
+        td(b ? App.fmt(b.q3) : '—', bold) + td(b ? App.fmt(b.max) : '—', bold) + td(b ? (b.outliers || []).length : '—', bold), bold);
+      const rowsC = allIds.map(cid => rowC(boxMap[cid], clsName(cid), false)).join('') + rowC(gradeBox, '全年级', true);
+
+      // —— 表格 D：各分段人数 ——
+      const segs = App.scoreSegments(full);
+      const countSeg = (recs, si) => recs.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0);
+      const headD = '<tr><th>分数段</th>' + allIds.map(cid => `<th class="num">${App.esc(clsName(cid))}</th>`).join('') + '<th class="num">全年级</th></tr>';
+      const rowsD = segs.map((seg, si) => tr('<td><b>' + App.esc(seg.label) + '</b></td>' +
+        allIds.map(cid => td(countSeg((ex.scores || {})[cid] || [], si), false)).join('') +
+        td(countSeg(allRecs, si), true), false)).join('');
+      const rowDTot = tr(nameCell('合计', false) +
+        allIds.map(cid => td(((ex.scores || {})[cid] || []).length, true)).join('') + td(allRecs.length, true), true);
+
+      // —— 试卷质量分析 ——
       const quality = allRecs.length >= 2 ? this.computeItemQuality(allRecs, ex.fullMarks) : null;
       const qualityRows = quality && !quality.error ? quality.rows.map(r => `<tr>
         <td><b>${App.esc(r.label)}</b></td><td class="num">${r.full}</td>
@@ -868,44 +894,50 @@
         <td>${App.esc(r.advice)}</td></tr>`).join('')
         : `<tr><td colspan="6" style="text-align:center;color:#8aa096;padding:20px">${quality && quality.error ? App.esc(quality.error) : '暂无成绩数据'}</td></tr>`;
 
+      const classChips = allIds.map(cid => `<button class="chip ${selIds.includes(cid) ? 'on' : ''}" data-cls="${cid}">${App.esc(clsName(cid))}</button>`).join('');
+
       v.innerHTML = `
       <div class="crumb"><button data-act="backExam">← 返回 ${App.esc(ex.name)}</button></div>
       <div class="card">
         <div class="flex mb12">
-          <div class="card-title" style="margin:0">📐 各班成绩综合比对 <span class="hint">（${App.esc(ex.name)} · ${App.esc(ex.date)}）</span></div>
+          <div class="card-title" style="margin:0">📐 ${App.esc(ex.name)} · 成绩分析 <span class="hint">（${App.esc(ex.date)} · 满分 ${full} 分）</span></div>
           <div class="spacer"></div>
           <button class="btn btn-ghost btn-sm" data-act="expAnalysis">📊 导出分析 Excel</button>
           <button class="btn btn-primary btn-sm" data-act="expPdf">📄 导出 PDF 报告</button>
         </div>
-        <div class="field"><label>指标切换</label><div class="chips">${metricChips}</div></div>
-        <div class="field"><label>班级筛选（图表用）</label><div class="chips">${classChips}</div></div>
-        <div class="field"><label>分数线设置（占满分百分比）</label>
+        <div class="field"><label>班级筛选（下方图表用）</label><div class="chips">${classChips}</div></div>
+        <div class="field"><label>分数线设置（占满分百分比，影响优秀率 / 及格率 / 低分率）</label>
           <div class="flex">
             优秀 ≥ <input type="number" class="thr-inp" data-t="good" value="${thr.good}" style="width:70px;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px">%
             及格 ≥ <input type="number" class="thr-inp" data-t="pass" value="${thr.pass}" style="width:70px;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px">%
             低分 &lt; <input type="number" class="thr-inp" data-t="low" value="${thr.low}" style="width:70px;padding:6px 8px;border:1.5px solid var(--line);border-radius:8px">%
-            <span class="small muted">（满分 ${App.fullTotal(ex.fullMarks)} 分）</span>
           </div>
-        </div>
-        <div class="tbl-wrap">
-          <table class="tbl">
-            <thead>${headerRow}</thead>
-            <tbody>${bodyRows}
-              <tr class="row-good"><td>🏆 全年级</td>${keys.map(k => `<td class="num"><b>${this.metricVal(gradeStats[k], metric)}</b></td>`).join('')}</tr>
-            </tbody>
-          </table>
         </div>
       </div>
 
-      <!-- 试卷质量分析 -->
       <div class="card">
-        <div class="card-title">🧪 试卷质量分析 <span class="hint">（难度系数 = 平均分 ÷ 满分；区分度 = 高分组前 27% 均分 − 低分组后 27% 均分 ÷ 满分，按全年级参考学生计算）</span></div>
-        <div class="tbl-wrap">
-          <table class="tbl">
-            <thead><tr><th>题型</th><th class="num">满分</th><th class="num">平均分</th><th class="num">难度系数</th><th class="num">区分度</th><th>诊断建议</th></tr></thead>
-            <tbody>${qualityRows}</tbody>
-          </table>
-        </div>
+        <div class="card-title">📊 各班成绩总览（总分）</div>
+        <div class="tbl-wrap"><table class="tbl"><thead>${headA}</thead><tbody>${rowsA}</tbody></table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🧩 各班各题型得分率对比（%）</div>
+        <div class="tbl-wrap"><table class="tbl"><thead>${headB}</thead><tbody>${rowsB}</tbody></table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📦 各班总分分布（箱线图五数概括）</div>
+        <div class="tbl-wrap"><table class="tbl"><thead>${headC}</thead><tbody>${rowsC}</tbody></table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🔢 各分段人数 <span class="hint">（120-110 · 110-100 · … · 40-30 · 30-0）</span></div>
+        <div class="tbl-wrap"><table class="tbl"><thead>${headD}</thead><tbody>${rowsD}${rowDTot}</tbody></table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🧪 试卷质量分析 <span class="hint">（难度系数 = 平均分 ÷ 满分；区分度 = 高分组前 27% 均分 − 低分组后 27% 均分 ÷ 满分）</span></div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>题型</th><th class="num">满分</th><th class="num">平均分</th><th class="num">难度系数</th><th class="num">区分度</th><th>诊断建议</th></tr></thead><tbody>${qualityRows}</tbody></table></div>
       </div>
 
       <div class="chart-grid">
@@ -916,13 +948,13 @@
           <div class="chart-box"><canvas id="chAvg"></canvas></div>
         </div>
         <div class="chart-card wide">
-          <h4>📦 各班总分分布箱线图（中位数 / 四分位 / 极值 / 离群点）
+          <h4>📦 各班总分分布箱线图
             <span class="flex"><button class="btn btn-xs btn-ghost" data-act="pngBox">⬇ PNG</button></span>
           </h4>
           <div class="chart-box"><canvas id="chBox"></canvas></div>
         </div>
         <div class="chart-card wide">
-          <h4>🧩 各题型得分率对比（所选班级 · 分组柱状图）
+          <h4>🧩 各题型得分率对比（所选班级）
             <span class="flex"><button class="btn btn-xs btn-ghost" data-act="pngRate">⬇ PNG</button></span>
           </h4>
           <div class="chart-box tall"><canvas id="chRate"></canvas></div>
@@ -946,7 +978,7 @@
           <div class="chart-box"><canvas id="chSeg"></canvas></div>
         </div>
         <div class="chart-card wide">
-          <h4>🔢 各分段人数（120-110 · 110-100 · … · 40-30 · 30-0，堆叠显示各班）
+          <h4>🔢 各分段人数（堆叠显示各班）
             <span class="flex"><button class="btn btn-xs btn-ghost" data-act="pngHist">⬇ PNG</button></span>
           </h4>
           <div class="chart-box tall"><canvas id="chHist"></canvas></div>
@@ -965,62 +997,23 @@
           'pngHlm': () => this.exportChartPNG('chHlm'),
           'pngSeg': () => this.exportChartPNG('chSeg'),
           'pngHist': () => this.exportChartPNG('chHist')
-        },
-        change: {}
+        }
       });
-      v.querySelectorAll('.chip[data-metric]').forEach(c => c.onclick = () => { this.anMetric = c.dataset.metric; this._refreshMetricTable(); });
       v.querySelectorAll('.chip[data-cls]').forEach(c => c.onclick = () => {
         if (!this.anClasses) this.anClasses = new Set(allIds);
         if (this.anClasses.has(c.dataset.cls)) this.anClasses.delete(c.dataset.cls); else this.anClasses.add(c.dataset.cls);
         if (!this.anClasses.size) this.anClasses = null;
-        const sel = this.anClasses ? allIds.filter(id => this.anClasses.has(id)) : allIds;
-        this._updateChartsSel(ex, sel);
+        this.render();
       });
       v.querySelectorAll('.thr-inp').forEach(inp => inp.onchange = () => {
         if (!this.anThr) this.anThr = { ...DB().state.settings };
         this.anThr[inp.dataset.t] = +inp.value || 0;
-        const sel = this.anClasses ? allIds.filter(id => this.anClasses.has(id)) : allIds;
-        this._updateChartsSel(ex, sel);
-        this._refreshMetricTable();
+        this.render();
       });
 
       // —— 绘制图表 ——
       if (!selIds.length) { App.toast('请至少选择一个班级', 'err'); return; }
-      this._analysisStats = { statsMap, gradeStats, allIds };
       this.drawCharts(ex, selIds, statsMap, gradeStats);
-    },
-
-    /* ---- 局部刷新（避免全量重建） ---- */
-    _refreshMetricTable() {
-      const s = this._analysisStats;
-      if (!s) return;
-      const { statsMap, gradeStats, allIds } = s;
-      const metric = this.anMetric;
-      const keys = [...App.ITEM_KEYS, 'total'];
-      const keyLabel = k => k === 'total' ? '总分' : App.itemLabel(k);
-      const bodyRows = allIds.map(cid => {
-        const cls = DB().getClass(cid);
-        return `<tr><td><b>${App.esc(cls ? cls.name : cid + '班')}</b></td>${keys.map(k => `<td class="num">${this.metricVal(statsMap[cid][k], metric)}</td>`).join('')}</tr>`;
-      }).join('');
-      const gradeRow = `<tr class="row-good"><td>🏆 全年级</td>${keys.map(k => `<td class="num"><b>${this.metricVal(gradeStats[k], metric)}</b></td>`).join('')}</tr>`;
-      const bodyEl = document.querySelector('#gradesView .tbl tbody');
-      if (bodyEl) bodyEl.innerHTML = bodyRows + gradeRow;
-      document.querySelectorAll('#gradesView .chip[data-metric]').forEach(c => c.classList.toggle('on', c.dataset.metric === metric));
-    },
-
-    _updateChartsSel(ex, selIds) {
-      const s = this._analysisStats;
-      if (!s) return;
-      const thr = this.thresholds();
-      const statsMap = {};
-      s.allIds.forEach(cid => { statsMap[cid] = this.computeClassStats((ex.scores || {})[cid] || [], ex.fullMarks, thr); });
-      this._analysisStats = { ...s, statsMap };
-      App.closeAllCharts(); this.charts = {};
-      this.drawCharts(ex, selIds, statsMap, s.gradeStats);
-      document.querySelectorAll('#gradesView .chip[data-cls]').forEach(c => {
-        const cid = c.dataset.cls;
-        c.classList.toggle('on', selIds.includes(cid));
-      });
     },
 
     drawCharts(ex, selIds, statsMap, gradeStats) {
