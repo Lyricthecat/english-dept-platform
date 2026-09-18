@@ -843,12 +843,6 @@
       allIds.forEach(cid => allRecs.push(...((ex.scores || {})[cid] || [])));
       const gradeStats = this.computeClassStats(allRecs, ex.fullMarks, thr);
 
-      // 五数概括（箱线图数据）
-      const boxOf = recs => App.boxplotData(recs.map(r => App.num(r.total)).filter(v => v != null));
-      const boxMap = {};
-      allIds.forEach(cid => { boxMap[cid] = boxOf((ex.scores || {})[cid] || []); });
-      const gradeBox = boxOf(allRecs);
-
       const td = (x, bold) => `<td class="num">${bold ? '<b>' + x + '</b>' : x}</td>`;
       const tr = (cells, bold) => `<tr${bold ? ' class="row-good"' : ''}>${cells}</tr>`;
       const nameCell = (label, bold) => `<td>${bold ? '🏆 ' : ''}<b>${App.esc(label)}</b></td>`;
@@ -867,22 +861,19 @@
         [...App.ITEM_KEYS.map(k => td(App.fmtPct(st[k].rate), bold)), td(App.fmtPct(st.total.rate), bold)].join(''), bold);
       const rowsB = allIds.map(cid => rowB(statsMap[cid], clsName(cid), false)).join('') + rowB(gradeStats, '全年级', true);
 
-      // —— 表格 C：各班总分分布（五数概括）——
-      const headC = '<tr><th>班级</th><th class="num">最低分</th><th class="num">下四分位 Q1</th><th class="num">中位数</th><th class="num">上四分位 Q3</th><th class="num">最高分</th><th class="num">离群人数</th></tr>';
-      const rowC = (b, label, bold) => tr(nameCell(label, bold) +
-        td(b ? App.fmt(b.min) : '—', bold) + td(b ? App.fmt(b.q1) : '—', bold) + td(b ? App.fmt(b.median) : '—', bold) +
-        td(b ? App.fmt(b.q3) : '—', bold) + td(b ? App.fmt(b.max) : '—', bold) + td(b ? (b.outliers || []).length : '—', bold), bold);
-      const rowsC = allIds.map(cid => rowC(boxMap[cid], clsName(cid), false)).join('') + rowC(gradeBox, '全年级', true);
+      // —— 表格 C：各班总分最高 / 最低 / 中位数 ——
+      const headC = '<tr><th>班级</th><th class="num">最高分</th><th class="num">最低分</th><th class="num">中位数</th></tr>';
+      const rowC = (st, label, bold) => tr(nameCell(label, bold) +
+        td(st.max != null ? st.max : '—', bold) + td(st.min != null ? st.min : '—', bold) + td(App.fmt(st.median), bold), bold);
+      const rowsC = allIds.map(cid => rowC(statsMap[cid].total, clsName(cid), false)).join('') + rowC(gradeStats.total, '全年级', true);
 
-      // —— 表格 D：各分段人数 ——
+      // —— 表格 D：各分段人数（班级 × 分数段）——
       const segs = App.scoreSegments(full);
       const countSeg = (recs, si) => recs.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0);
-      const headD = '<tr><th>分数段</th>' + allIds.map(cid => `<th class="num">${App.esc(clsName(cid))}</th>`).join('') + '<th class="num">全年级</th></tr>';
-      const rowsD = segs.map((seg, si) => tr('<td><b>' + App.esc(seg.label) + '</b></td>' +
-        allIds.map(cid => td(countSeg((ex.scores || {})[cid] || [], si), false)).join('') +
-        td(countSeg(allRecs, si), true), false)).join('');
-      const rowDTot = tr(nameCell('合计', false) +
-        allIds.map(cid => td(((ex.scores || {})[cid] || []).length, true)).join('') + td(allRecs.length, true), true);
+      const headD = '<tr><th>班级</th>' + segs.map(seg => `<th class="num">${seg.label}</th>`).join('') + '<th class="num">合计</th></tr>';
+      const rowD = (recs, label, bold) => tr(nameCell(label, bold) +
+        segs.map((seg, si) => td(countSeg(recs, si), bold)).join('') + td(recs.length, bold), bold);
+      const rowsD = allIds.map(cid => rowD((ex.scores || {})[cid] || [], clsName(cid), false)).join('') + rowD(allRecs, '全年级', true);
 
       // —— 试卷质量分析 ——
       const quality = allRecs.length >= 2 ? this.computeItemQuality(allRecs, ex.fullMarks) : null;
@@ -926,13 +917,13 @@
       </div>
 
       <div class="card">
-        <div class="card-title">📦 各班总分分布（箱线图五数概括）</div>
+        <div class="card-title">📈 各班总分最高 / 最低 / 中位数</div>
         <div class="tbl-wrap"><table class="tbl"><thead>${headC}</thead><tbody>${rowsC}</tbody></table></div>
       </div>
 
       <div class="card">
         <div class="card-title">🔢 各分段人数 <span class="hint">（120-110 · 110-100 · … · 40-30 · 30-0）</span></div>
-        <div class="tbl-wrap"><table class="tbl"><thead>${headD}</thead><tbody>${rowsD}${rowDTot}</tbody></table></div>
+        <div class="tbl-wrap"><table class="tbl"><thead>${headD}</thead><tbody>${rowsD}</tbody></table></div>
       </div>
 
       <div class="card">
@@ -1213,21 +1204,12 @@
       const s5 = [['题型', '满分', '平均分', '难度系数', '区分度', '诊断建议'],
         ...(q && !q.error ? q.rows.map(r => [r.label, r.full, r.avg != null ? +r.avg.toFixed(1) : '', r.difficulty != null ? +r.difficulty.toFixed(2) : '', r.discrimination != null ? +r.discrimination.toFixed(2) : '', r.advice]) : [['—', '', '', '', '', q && q.error ? q.error : '暂无成绩数据']])];
 
-      // Sheet6 各分段人数（每 10 分一段，从高到低）
+      // Sheet6 各分段人数（班级 × 分数段）
       const segs6 = App.scoreSegments(full);
-      const segRows = segs6.map((seg, si) => {
-        const row = [seg.label];
-        allIds.forEach(cid => {
-          let cnt = 0;
-          ((ex.scores || {})[cid] || []).forEach(r => { if (App.scoreBinIndex(App.num(r.total), full) === si) cnt++; });
-          row.push(cnt);
-        });
-        let totalCnt = 0;
-        allRecs.forEach(r => { if (App.scoreBinIndex(App.num(r.total), full) === si) totalCnt++; });
-        row.push(totalCnt);
-        return row;
-      });
-      const s6 = [['分数段', ...allIds.map(cid => clsName(cid)), '全年级'], ...segRows];
+      const cntSeg = (recs, si) => recs.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0);
+      const s6 = [['班级', ...segs6.map(s => s.label), '合计'],
+        ...allIds.map(cid => { const recs = (ex.scores || {})[cid] || []; return [clsName(cid), ...segs6.map((_, si) => cntSeg(recs, si)), recs.length]; }),
+        ['全年级', ...segs6.map((_, si) => cntSeg(allRecs, si)), allRecs.length]];
 
       XLSX.writeFile(App.makeWorkbook([
         { name: '综合比对', aoa: s1, widths: [8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 10] },
