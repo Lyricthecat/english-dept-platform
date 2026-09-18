@@ -730,6 +730,7 @@
           <span class="badge green">${App.esc(ex.name)}</span>
           <span class="badge gray">满分 ${full} 分</span>
           <button class="btn btn-ghost btn-sm" data-act="exportClassAnalysis">📊 导出本班分析 Excel</button>
+          <button class="btn btn-primary btn-sm" data-act="exportClassPdf">📄 导出 PDF 报告</button>
         </div>
         <div class="stat-strip mt12">${statCards}</div>
         <div class="small muted mt8">💡 下图与表均为「本班」与「${App.esc(cmpLabel)}」对比${tier ? `（分层可在设置中调整）` : '（未配置班级分层，可在设置中配置）'}</div>
@@ -776,6 +777,7 @@ ${tierTable}
         click: {
           backExam: () => { this.view = 'exam:' + ex.id; this.render(); },
           exportClassAnalysis: () => this.exportClassAnalysis(ex, classId),
+          exportClassPdf: () => this.exportClassAnalysisPDF(ex, classId),
           pngCaRadar: () => this.exportChartPNG('chCaRadar'),
           pngCaRate: () => this.exportChartPNG('chCaRate'),
           pngCaBox: () => this.exportChartPNG('chCaBox'),
@@ -965,7 +967,8 @@ ${tierTable}
           <div class="card-title" style="margin:0">📐 ${App.esc(ex.name)} · 成绩分析 <span class="hint">（${App.esc(ex.date)} · 满分 ${full} 分）</span></div>
           <div class="spacer"></div>
           <button class="btn btn-ghost btn-sm" data-act="expAnalysis">📊 导出分析 Excel</button>
-          <button class="btn btn-primary btn-sm" data-act="expPdf">📄 导出 PDF 报告</button>
+          <button class="btn btn-ghost btn-sm" data-act="expPdf">📄 导出 PDF 报告</button>
+          <button class="btn btn-primary btn-sm" data-act="expAllPdf">📦 一键打包导出（全年级 + 各班 PDF）</button>
         </div>
         <div class="field"><label>班级筛选（下方图表用）</label><div class="chips">${classChips}</div></div>
         <div class="field"><label>分数线设置（占满分百分比，影响优秀率 / 及格率 / 低分率）</label>
@@ -1052,6 +1055,7 @@ ${tierTable}
           backExam: () => { this.view = 'exam:' + ex.id; this.render(); },
           expAnalysis: () => this.exportAnalysis(ex),
           expPdf: () => this.exportAnalysisPDF(ex),
+          expAllPdf: () => this.exportAllPDFs(ex),
           'pngAvg': () => this.exportChartPNG('chAvg'),
           'pngBox': () => this.exportChartPNG('chBox'),
           'pngRate': () => this.exportChartPNG('chRate'),
@@ -1293,155 +1297,276 @@ ${tierTable}
       App.toast('分析报告已导出 Excel', 'ok');
     },
 
-    /* ================= 导出 PDF 分析报告（Canvas 自绘 → jsPDF） ================= */
-    async exportAnalysisPDF(ex) {
-      if (!window.jspdf || !window.jspdf.jsPDF) { App.toast('PDF 组件未加载（lib/jspdf.umd.min.js）', 'err'); return; }
+    /* ================= PDF 报告（Canvas 自绘中文表格 → jsPDF） ================= */
+    _pdfReady() {
+      if (!window.jspdf || !window.jspdf.jsPDF) { App.toast('PDF 组件未加载（lib/jspdf.umd.min.js）', 'err'); return false; }
+      return true;
+    },
+    // 初始化 PDF 上下文（A4 竖版，画布按 96dpi）
+    _pdfInit() {
+      const doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'a4' });
+      return {
+        doc, pageNo: 0,
+        FONT: '"Microsoft YaHei","PingFang SC",sans-serif',
+        PW: 595, PH: 842, PXW: 794, PXH: 1123, PXM: 40
+      };
+    },
+    _pdfWrap(ctx, text, maxW) {
+      const lines = []; let cur = '';
+      for (const ch of String(text)) {
+        if (ctx.measureText(cur + ch).width > maxW && cur) { lines.push(cur); cur = ch; }
+        else cur += ch;
+      }
+      if (cur) lines.push(cur);
+      return lines.length ? lines : [''];
+    },
+    // 绘制表格（画布像素坐标），返回表尾 y
+    _pdfTable(ctx, x, y, colWidths, header, rows, opt) {
+      const o = Object.assign({ fontSize: 11, headerBg: '#d9f2e4', line: '#b8c9bf', pad: 6, lineH: 15 }, opt || {});
+      const FONT = '"Microsoft YaHei","PingFang SC",sans-serif';
+      const totalW = colWidths.reduce((a, b) => a + b, 0);
+      const cellH = r => Math.max(...r.map((c, i) => this._pdfWrap(ctx, String(c), colWidths[i] - o.pad * 2).length)) * o.lineH + o.pad * 2;
+      const drawRow = (cells, y0, isHeader) => {
+        const h = cellH(cells);
+        if (isHeader) { ctx.fillStyle = o.headerBg; ctx.fillRect(x, y0, totalW, h); }
+        ctx.strokeStyle = o.line; ctx.lineWidth = 1; ctx.strokeRect(x, y0, totalW, h);
+        let cx = x;
+        for (let i = 0; i < colWidths.length; i++) {
+          if (i > 0) { ctx.beginPath(); ctx.moveTo(cx, y0); ctx.lineTo(cx, y0 + h); ctx.stroke(); }
+          ctx.fillStyle = isHeader ? '#14503a' : '#20352b';
+          ctx.font = (isHeader ? 'bold ' : '') + o.fontSize + 'px ' + FONT;
+          const lines = this._pdfWrap(ctx, String(cells[i]), colWidths[i] - o.pad * 2);
+          lines.forEach((ln, li) => ctx.fillText(ln, cx + o.pad, y0 + o.pad + o.lineH * (li + 1) - 4));
+          cx += colWidths[i];
+        }
+        return h;
+      };
+      let yy = y;
+      yy += drawRow(header, yy, true);
+      rows.forEach(r => { yy += drawRow(r, yy, false); });
+      return yy;
+    },
+    // 新增一页
+    _pdfPage(P, drawFn, footer) {
+      const c = document.createElement('canvas');
+      c.width = P.PXW; c.height = P.PXH;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, P.PXW, P.PXH);
+      drawFn(ctx);
+      P.pageNo++;
+      ctx.fillStyle = '#8aa096'; ctx.font = '10px ' + P.FONT;
+      ctx.fillText(footer || '', P.PXM, P.PXH - 22);
+      ctx.fillText('第 ' + P.pageNo + ' 页', P.PXW - P.PXM - 44, P.PXH - 22);
+      if (P.pageNo > 1) P.doc.addPage();
+      P.doc.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, P.PW, P.PH);
+    },
+    _pdfTitle(ctx, P, main, sub) {
+      ctx.fillStyle = '#14503a'; ctx.font = 'bold 21px ' + P.FONT;
+      ctx.fillText(main, P.PXM, 52);
+      if (sub) { ctx.fillStyle = '#5c7266'; ctx.font = '12px ' + P.FONT; ctx.fillText(sub, P.PXM, 74); }
+    },
+    _pdfSection(ctx, P, text, y) {
+      ctx.fillStyle = '#14503a'; ctx.font = 'bold 13px ' + P.FONT;
+      ctx.fillText(text, P.PXM, y);
+    },
+
+    // ---------- 全年级成绩分析 PDF（3 页，表格为主）----------
+    _buildGradeAnalysisPdf(ex) {
+      if (!this._pdfReady()) return null;
       const st = DB().state.settings;
       const thr = this.thresholds();
       const allIds = ex.classIds;
-      const keys = [...App.ITEM_KEYS, 'total'];
-      const keyLabel = k => k === 'total' ? '总分' : App.itemLabel(k);
+      const full = App.fullTotal(ex.fullMarks);
       const clsName = cid => (DB().getClass(cid) || { name: cid + '班' }).name;
       const statsMap = {};
       allIds.forEach(cid => { statsMap[cid] = this.computeClassStats((ex.scores || {})[cid] || [], ex.fullMarks, thr); });
       const allRecs = [];
       allIds.forEach(cid => allRecs.push(...((ex.scores || {})[cid] || [])));
       const gs = this.computeClassStats(allRecs, ex.fullMarks, thr);
-      const full = App.fullTotal(ex.fullMarks);
-      const quality = allRecs.length >= 2 ? this.computeItemQuality(allRecs, ex.fullMarks) : null;
+      const P = this._pdfInit();
+      const foot = `${st.schoolName} · ${ex.name} 成绩分析报告`;
 
-      const FONT = '"Microsoft YaHei","PingFang SC",sans-serif';
-      const doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'a4' });
-      const PW = 595, PH = 842, M = 36; // pt
-      const CW = PW - M * 2;             // 内容宽 523pt
-      const PXW = 794, PXH = 1123;       // 96dpi 像素
-      const wrap = (ctx, text, maxW) => {
-        const lines = []; let cur = '';
-        for (const ch of String(text)) {
-          if (ctx.measureText(cur + ch).width > maxW && cur) { lines.push(cur); cur = ch; }
-          else cur += ch;
-        }
-        if (cur) lines.push(cur);
-        return lines.length ? lines : [''];
-      };
-      // 通用表格绘制，返回表尾 y
-      const drawTable = (ctx, x, y, colWidths, header, rows, opt) => {
-        const o = Object.assign({ fontSize: 11, headerBg: '#d9f2e4', line: '#b8c9bf', pad: 6, lineH: 15 }, opt || {});
-        const totalW = colWidths.reduce((a, b) => a + b, 0);
-        const cellH = r => Math.max(...r.map((c, i) => wrap(ctx, String(c), colWidths[i] - o.pad * 2).length)) * o.lineH + o.pad * 2;
-        const drawRow = (cells, y0, isHeader) => {
-          const h = cellH(cells);
-          if (isHeader) { ctx.fillStyle = o.headerBg; ctx.fillRect(x, y0, totalW, h); }
-          ctx.strokeStyle = o.line; ctx.lineWidth = 1; ctx.strokeRect(x, y0, totalW, h);
-          let cx = x;
-          for (let i = 0; i < colWidths.length; i++) {
-            if (i > 0) { ctx.beginPath(); ctx.moveTo(cx, y0); ctx.lineTo(cx, y0 + h); ctx.stroke(); }
-            ctx.fillStyle = isHeader ? '#14503a' : '#20352b';
-            ctx.font = (isHeader ? 'bold ' : '') + o.fontSize + 'px ' + FONT;
-            const lines = wrap(ctx, String(cells[i]), colWidths[i] - o.pad * 2);
-            lines.forEach((ln, li) => ctx.fillText(ln, cx + o.pad, y0 + o.pad + o.lineH * (li + 1) - 4));
-            cx += colWidths[i];
-          }
-          return h;
-        };
-        let yy = y;
-        yy += drawRow(header, yy, true);
-        rows.forEach(r => { yy += drawRow(r, yy, false); });
-        return yy;
-      };
-      const page = (drawFn, pageNo) => {
-        const c = document.createElement('canvas');
-        c.width = PXW; c.height = PXH;
-        const ctx = c.getContext('2d');
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, PXW, PXH);
-        drawFn(ctx);
-        // 页脚
-        ctx.fillStyle = '#8aa096'; ctx.font = '9px ' + FONT;
-        ctx.fillText(`${st.schoolName} · 成绩分析报告`, M, PXH - 18);
-        ctx.fillText(`第 ${pageNo} 页`, PXW - M - 40, PXH - 18);
-        if (doc.getNumberOfPages() > 1) doc.addPage();
-        doc.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, PW, PH);
-      };
-
-      const px = v => v / 96 * 72; // 像素→pt
-      // 1) 标题信息 + 综合比对表
-      page(ctx => {
-        ctx.fillStyle = '#14503a'; ctx.font = 'bold 22px ' + FONT;
-        ctx.fillText(`${st.schoolName} · ${ex.name} 成绩分析报告`, px(40), px(52));
-        ctx.fillStyle = '#5c7266'; ctx.font = '12px ' + FONT;
-        const info = `考试类型：${ex.type || '—'}    考试日期：${ex.date}    参考班级：${allIds.length} 个    参考人数：${allRecs.length} 人    满分：${full} 分`;
-        ctx.fillText(info, px(40), px(80));
-        ctx.fillStyle = '#7c9185'; ctx.font = '11px ' + FONT;
-        const rates = `全年级：平均分 ${App.fmt(gs.total.avg)} · 优秀率 ${App.fmtPct(gs.total.goodRate)} · 及格率 ${App.fmtPct(gs.total.passRate)} · 低分率 ${App.fmtPct(gs.total.lowRate)}`;
-        ctx.fillText(rates, px(40), px(99));
-        // 综合比对表（平均分）
-        ctx.fillStyle = '#14503a'; ctx.font = 'bold 13px ' + FONT;
-        ctx.fillText('一、各班成绩综合比对（平均分）', px(40), px(128));
-        const cw1 = [50, ...keys.map(() => 47)]; // 11 列
-        const header1 = ['班级', ...keys.map(keyLabel)];
-        const rows1 = [...allIds.map(cid => [clsName(cid), ...keys.map(k => this.metricVal(statsMap[cid][k], 'avg'))]),
-          ['全年级', ...keys.map(k => this.metricVal(gs[k], 'avg'))]];
-        drawTable(ctx, px(40), px(140), cw1.map(w => px(w)), header1, rows1, { fontSize: 11 });
-      }, 1);
-      // 2) 试卷质量分析 + 分数段
-      page(ctx => {
-        ctx.fillStyle = '#14503a'; ctx.font = 'bold 13px ' + FONT;
-        ctx.fillText('二、试卷质量分析（难度 / 区分度）', px(40), px(44));
-        if (quality && !quality.error) {
-          ctx.fillStyle = '#5c7266'; ctx.font = '11px ' + FONT;
-          ctx.fillText(`高分组（前 ${quality.highN} 人，均分 ${App.fmt(quality.highAvg)}）与低分组（后 ${quality.lowN} 人，均分 ${App.fmt(quality.lowAvg)}）对比`, px(40), px(64));
-          const cw2 = [90, 55, 70, 80, 80, 140];
-          const header2 = ['题型', '满分', '平均分', '难度系数', '区分度', '诊断建议'];
-          const rows2 = quality.rows.map(r => [r.label, r.full, r.avg != null ? App.fmt(r.avg, 1) : '—', r.difficulty != null ? App.fmt(r.difficulty, 2) : '—', r.discrimination != null ? App.fmt(r.discrimination, 2) : '—', r.advice]);
-          drawTable(ctx, px(40), px(78), cw2.map(w => px(w)), header2, rows2, { fontSize: 10.5 });
-        } else {
-          ctx.fillStyle = '#7c9185'; ctx.font = '11px ' + FONT;
-          ctx.fillText(quality && quality.error ? quality.error : '暂无成绩数据', px(40), px(80));
-        }
-        // 分数段
-        ctx.fillStyle = '#14503a'; ctx.font = 'bold 13px ' + FONT;
-        ctx.fillText('三、分数段统计', px(40), px(360));
-        const cw3 = [90, 90, 90, 90, 100];
-        const header3 = ['班级', '参考人数', '优秀人数', '及格人数', '待及格人数'];
-        const rows3 = [...allIds.map(cid => {
-          const t = statsMap[cid].total;
-          return [clsName(cid), t.count, t.goodN, t.passN, t.count - t.passN];
-        }), ['全年级', gs.total.count, gs.total.goodN, gs.total.passN, gs.total.count - gs.total.passN]];
-        drawTable(ctx, px(40), px(374), cw3.map(w => px(w)), header3, rows3, { fontSize: 11 });
-      }, 2);
-      // 3) 图表页
-      const chartImgs = [];
-      for (const id of ['chAvg', 'chBox', 'chRadar', 'chHist']) {
-        const ch = App.charts.find(c => c.canvas && c.canvas.id === id);
-        if (!ch) continue;
-        const box = ch.canvas.parentElement;
-        const oldH = box.style.height;
-        box.style.height = '760px';
-        try { ch.resize(ch.width, 760, false); } catch (e) {}
-        await new Promise(r => requestAnimationFrame(r));
-        const img = ch.toBase64Image();
-        box.style.height = oldH;
-        try { ch.resize(ch.width, parseInt(oldH) || 300, false); } catch (e) {}
-        chartImgs.push(img);
-      }
-      if (chartImgs.length) {
-        chartImgs.forEach((img, i) => {
-          page(ctx => {
-            ctx.fillStyle = '#14503a'; ctx.font = 'bold 13px ' + FONT;
-            const titles = { chAvg: '各班总分平均分对比', chBox: '各班总分分布箱线图', chRadar: '各题型得分率雷达图', chHist: '各分段人数（每 10 分一段）' };
-            const id = ['chAvg', 'chBox', 'chRadar', 'chHist'][i];
-            ctx.fillText(titles[id] || '图表', px(40), px(44));
-            const im = new Image();
-            im.src = img;
-            const w = CW - 20, h = w * im.height / im.width;
-            ctx.drawImage(im, px(50), px(60), px(w), px(h));
-          }, 3 + i);
+      // 页1：总览 + 最高/最低/中位数
+      this._pdfPage(P, ctx => {
+        this._pdfTitle(ctx, P, `${st.schoolName} · ${ex.name} 成绩分析报告`,
+          `考试类型：${ex.type || '—'}　日期：${ex.date}　参考班级：${allIds.length} 个　参考人数：${allRecs.length} 人　满分：${full} 分`);
+        ctx.fillStyle = '#7c9185'; ctx.font = '11px ' + P.FONT;
+        ctx.fillText(`全年级：平均分 ${App.fmt(gs.total.avg)} · 最高 ${gs.total.max ?? '—'} · 最低 ${gs.total.min ?? '—'} · 中位数 ${App.fmt(gs.total.median)} · 优秀率 ${App.fmtPct(gs.total.goodRate)} · 及格率 ${App.fmtPct(gs.total.passRate)} · 低分率 ${App.fmtPct(gs.total.lowRate)}`, P.PXM, 96);
+        this._pdfSection(ctx, P, '一、各班成绩总览（总分）', 126);
+        const h1 = ['班级', '参考人数', '平均分', '最高分', '最低分', '中位数', '班内分差', '优秀率', '及格率', '低分率', '得分率'];
+        const rows1 = allIds.map(cid => {
+          const s = statsMap[cid].total;
+          return [clsName(cid), s.count, App.fmt(s.avg), s.max ?? '—', s.min ?? '—', App.fmt(s.median), App.fmt(s.range), App.fmtPct(s.goodRate), App.fmtPct(s.passRate), App.fmtPct(s.lowRate), App.fmtPct(s.rate)];
         });
-      }
-      try {
-        doc.save(`${ex.name}-成绩分析报告.pdf`);
-        App.toast('PDF 分析报告已生成', 'ok');
-      } catch (e) { App.toast('PDF 生成失败：' + e.message, 'err'); }
+        rows1.push(['全年级', gs.total.count, App.fmt(gs.total.avg), gs.total.max ?? '—', gs.total.min ?? '—', App.fmt(gs.total.median), App.fmt(gs.total.range), App.fmtPct(gs.total.goodRate), App.fmtPct(gs.total.passRate), App.fmtPct(gs.total.lowRate), App.fmtPct(gs.total.rate)]);
+        let y = this._pdfTable(ctx, P.PXM, 138, [58, ...Array(10).fill(65)], h1, rows1, { fontSize: 10 });
+        y += 30;
+        this._pdfSection(ctx, P, '二、各班总分最高 / 最低 / 中位数', y); y += 12;
+        const rows2 = allIds.map(cid => { const s = statsMap[cid].total; return [clsName(cid), s.max ?? '—', s.min ?? '—', App.fmt(s.median)]; });
+        rows2.push(['全年级', gs.total.max ?? '—', gs.total.min ?? '—', App.fmt(gs.total.median)]);
+        this._pdfTable(ctx, P.PXM, y, [160, 184, 184, 186], ['班级', '最高分', '最低分', '中位数'], rows2, { fontSize: 10 });
+      }, foot);
+
+      // 页2：各题型得分率 + 各分段人数
+      this._pdfPage(P, ctx => {
+        this._pdfSection(ctx, P, '三、各班各题型得分率对比（%）', 48);
+        const rows3 = allIds.map(cid => [clsName(cid), ...App.ITEM_KEYS.map(k => App.fmtPct(statsMap[cid][k].rate)), App.fmtPct(statsMap[cid].total.rate)]);
+        rows3.push(['全年级', ...App.ITEM_KEYS.map(k => App.fmtPct(gs[k].rate)), App.fmtPct(gs.total.rate)]);
+        let y = this._pdfTable(ctx, P.PXM, 60, [58, ...Array(10).fill(65)], ['班级', ...App.ITEMS.map(i => i.label), '总分'], rows3, { fontSize: 10 });
+        y += 30;
+        this._pdfSection(ctx, P, '四、各分段人数', y); y += 12;
+        const segs = App.scoreSegments(full);
+        const cntSeg = (recs, si) => recs.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0);
+        const rows4 = allIds.map(cid => { const recs = (ex.scores || {})[cid] || []; return [clsName(cid), ...segs.map((_, si) => cntSeg(recs, si)), recs.length]; });
+        rows4.push(['全年级', ...segs.map((_, si) => cntSeg(allRecs, si)), allRecs.length]);
+        this._pdfTable(ctx, P.PXM, y, [58, ...Array(11).fill(60)], ['班级', ...segs.map(s => s.label), '合计'], rows4, { fontSize: 9.5 });
+      }, foot);
+
+      // 页3：试卷质量分析
+      this._pdfPage(P, ctx => {
+        this._pdfSection(ctx, P, '五、试卷质量分析', 48);
+        ctx.fillStyle = '#7c9185'; ctx.font = '10.5px ' + P.FONT;
+        ctx.fillText('难度系数 = 平均分 ÷ 满分；区分度 = （高分组前 27% 均分 − 低分组后 27% 均分）÷ 满分', P.PXM, 68);
+        const q = allRecs.length >= 2 ? this.computeItemQuality(allRecs, ex.fullMarks) : null;
+        const rows5 = q && !q.error ? q.rows.map(r => [r.label, r.full, r.avg != null ? App.fmt(r.avg, 1) : '—', r.difficulty != null ? App.fmt(r.difficulty, 2) : '—', r.discrimination != null ? App.fmt(r.discrimination, 2) : '—', r.advice])
+          : [['—', '', '', '', '', q && q.error ? q.error : '暂无成绩数据']];
+        this._pdfTable(ctx, P.PXM, 82, [92, 58, 70, 84, 84, 326], ['题型', '满分', '平均分', '难度系数', '区分度', '诊断建议'], rows5, { fontSize: 10 });
+      }, foot);
+      return P.doc;
     },
+
+    // ---------- 单班成绩分析 PDF（3 页，含同层次对比）----------
+    _buildClassAnalysisPdf(ex, classId) {
+      if (!this._pdfReady()) return null;
+      const st = DB().state.settings;
+      const thr = this.thresholds();
+      const cls = DB().getClass(classId);
+      const clsLabel = cls ? cls.name : classId + '班';
+      const recs = (ex.scores || {})[classId] || [];
+      const full = App.fullTotal(ex.fullMarks);
+      const cmpInfo = this._classCompare(ex, classId);
+      const { tier, tierIds, cmpLabel, cmpRecs } = cmpInfo;
+      const cs = this.computeClassStats(recs, ex.fullMarks, thr);
+      const gs = this.computeClassStats(cmpRecs, ex.fullMarks, thr);
+      const P = this._pdfInit();
+      const foot = `${st.schoolName} · ${clsLabel} 成绩分析报告`;
+      const dv = (a, b, isPct) => {
+        if (a == null || b == null) return '—';
+        const d = isPct ? (a - b) * 100 : (a - b);
+        return (d >= 0 ? '+' : '') + App.fmt(d, 1) + (isPct ? '%' : '');
+      };
+
+      // 页1：统计摘要 + 各题型得分率对比
+      this._pdfPage(P, ctx => {
+        this._pdfTitle(ctx, P, `${st.schoolName} · ${clsLabel} 成绩分析报告`,
+          `考试：${ex.name}（${ex.date}）　层次：${tier ? tier + ' 层' : '未分层'}　对比基准：${cmpLabel}　满分：${full} 分`);
+        this._pdfSection(ctx, P, '一、统计摘要', 106);
+        const rows1 = [
+          ['参考人数', cs.total.count, gs.total.count, dv(cs.total.count, gs.total.count, false)],
+          ['平均分', App.fmt(cs.total.avg), App.fmt(gs.total.avg), dv(cs.total.avg, gs.total.avg, false)],
+          ['最高分', cs.total.max ?? '—', gs.total.max ?? '—', dv(cs.total.max, gs.total.max, false)],
+          ['最低分', cs.total.min ?? '—', gs.total.min ?? '—', dv(cs.total.min, gs.total.min, false)],
+          ['中位数', App.fmt(cs.total.median), App.fmt(gs.total.median), dv(cs.total.median, gs.total.median, false)],
+          ['优秀率', App.fmtPct(cs.total.goodRate), App.fmtPct(gs.total.goodRate), dv(cs.total.goodRate, gs.total.goodRate, true)],
+          ['及格率', App.fmtPct(cs.total.passRate), App.fmtPct(gs.total.passRate), dv(cs.total.passRate, gs.total.passRate, true)],
+          ['低分率', App.fmtPct(cs.total.lowRate), App.fmtPct(gs.total.lowRate), dv(cs.total.lowRate, gs.total.lowRate, true)],
+          ['得分率', App.fmtPct(cs.total.rate), App.fmtPct(gs.total.rate), dv(cs.total.rate, gs.total.rate, true)]
+        ];
+        let y = this._pdfTable(ctx, P.PXM, 118, [160, 184, 184, 186], ['指标', clsLabel, cmpLabel, '差值'], rows1, { fontSize: 10.5 });
+        y += 30;
+        this._pdfSection(ctx, P, '二、各题型得分率对比（%）', y); y += 12;
+        const rows2 = [...App.ITEM_KEYS.map(k => [App.itemLabel(k), App.fmtPct(cs[k].rate), App.fmtPct(gs[k].rate), dv(cs[k].rate, gs[k].rate, true)]),
+          ['总分', App.fmtPct(cs.total.rate), App.fmtPct(gs.total.rate), dv(cs.total.rate, gs.total.rate, true)]];
+        this._pdfTable(ctx, P.PXM, y, [160, 184, 184, 186], ['题型', clsLabel, cmpLabel, '差值'], rows2, { fontSize: 10.5 });
+      }, foot);
+
+      // 页2：同层次各班对比 + 各分段人数
+      this._pdfPage(P, ctx => {
+        const hasTier = tier && tierIds.length;
+        this._pdfSection(ctx, P, hasTier ? `三、同层次（${tier} 层）各班对比` : '三、各班对比', 48);
+        let y = 60;
+        if (hasTier) {
+          const tierAll = [];
+          tierIds.forEach(cid => tierAll.push(...((ex.scores || {})[cid] || [])));
+          const ts = this.computeClassStats(tierAll, ex.fullMarks, thr).total;
+          const rows3 = tierIds.map(cid => {
+            const s = this.computeClassStats((ex.scores || {})[cid] || [], ex.fullMarks, thr).total;
+            const nm = (DB().getClass(cid) || { name: cid + '班' }).name;
+            return [String(cid) === String(classId) ? nm + '（本班）' : nm, s.count, App.fmt(s.avg), s.max ?? '—', s.min ?? '—', App.fmt(s.median), App.fmtPct(s.goodRate), App.fmtPct(s.passRate), App.fmtPct(s.lowRate)];
+          });
+          rows3.push([`${tier} 层合计`, ts.count, App.fmt(ts.avg), ts.max ?? '—', ts.min ?? '—', App.fmt(ts.median), App.fmtPct(ts.goodRate), App.fmtPct(ts.passRate), App.fmtPct(ts.lowRate)]);
+          y = this._pdfTable(ctx, P.PXM, y, [112, 62, 64, 64, 64, 64, 90, 90, 96], ['班级', '参考人数', '平均分', '最高分', '最低分', '中位数', '优秀率', '及格率', '低分率'], rows3, { fontSize: 10 });
+        } else {
+          ctx.fillStyle = '#7c9185'; ctx.font = '11px ' + P.FONT;
+          ctx.fillText('（未配置班级分层，可在「设置」中配置后再查看同层次对比）', P.PXM, y); y += 20;
+        }
+        y += 30;
+        this._pdfSection(ctx, P, '四、各分段人数', y); y += 12;
+        const segs = App.scoreSegments(full);
+        const cntSeg = (arr, si) => arr.reduce((s, x) => s + (App.scoreBinIndex(App.num(x.total), full) === si ? 1 : 0), 0);
+        const rows4 = segs.map((seg, si) => [seg.label, cntSeg(recs, si), cntSeg(cmpRecs, si), cntSeg(recs, si) + cntSeg(cmpRecs, si)]);
+        rows4.push(['合计', recs.length, cmpRecs.length, recs.length + cmpRecs.length]);
+        this._pdfTable(ctx, P.PXM, y, [130, 194, 194, 196], ['分数段', clsLabel, cmpLabel, '合计'], rows4, { fontSize: 10 });
+      }, foot);
+
+      // 页3：本班成绩排名明细
+      this._pdfPage(P, ctx => {
+        this._pdfSection(ctx, P, '五、本班成绩排名明细', 48);
+        const sorted = [...recs].sort((a, b) => (b.total != null ? b.total : -1) - (a.total != null ? a.total : -1));
+        const rows5 = sorted.map((r, i) => [r.rank != null ? r.rank : i + 1, r.no || '—', r.name, ...App.ITEM_KEYS.map(k => r[k] != null ? App.fmt(r[k]) : '—'), r.total != null ? App.fmt(r.total) : '—']);
+        const shown = rows5.slice(0, 32);
+        this._pdfTable(ctx, P.PXM, 60, [46, 76, 76, ...Array(9).fill(52), 58], ['排名', '学号', '姓名', ...App.ITEMS.map(i => i.label), '总分'], shown, { fontSize: 9 });
+        if (rows5.length > shown.length) {
+          ctx.fillStyle = '#8aa096'; ctx.font = '10px ' + P.FONT;
+          ctx.fillText(`（本页仅显示前 ${shown.length} 名，共 ${rows5.length} 人，完整名单请导出 Excel）`, P.PXM, P.PXH - 60);
+        }
+      }, foot);
+      return P.doc;
+    },
+
+    // 导出：全年级 PDF
+    exportAnalysisPDF(ex) {
+      const doc = this._buildGradeAnalysisPdf(ex);
+      if (!doc) return;
+      try { doc.save(`${ex.name}-全年级成绩分析报告.pdf`); App.toast('已导出全年级成绩分析 PDF', 'ok'); }
+      catch (e) { App.toast('PDF 导出失败：' + e.message, 'err'); }
+    },
+
+    // 导出：单班 PDF
+    exportClassAnalysisPDF(ex, classId) {
+      const doc = this._buildClassAnalysisPdf(ex, classId);
+      if (!doc) return;
+      const nm = (DB().getClass(classId) || { name: classId + '班' }).name;
+      try { doc.save(`${ex.name}-${nm}成绩分析报告.pdf`); App.toast(`已导出 ${nm} 成绩分析 PDF`, 'ok'); }
+      catch (e) { App.toast('PDF 导出失败：' + e.message, 'err'); }
+    },
+
+    // 一键打包导出：全年级 + 各班 PDF（zip）
+    async exportAllPDFs(ex) {
+      if (!this._pdfReady()) return;
+      if (!window.JSZip) { App.toast('打包组件未加载（lib/jszip.min.js）', 'err'); return; }
+      const clsName = cid => (DB().getClass(cid) || { name: cid + '班' }).name;
+      const zip = new window.JSZip();
+      let n = 0;
+      App.toast('正在生成 PDF，请稍候…', 'ok');
+      try {
+        const gradeDoc = this._buildGradeAnalysisPdf(ex);
+        if (gradeDoc) { zip.file('全年级-成绩分析报告.pdf', gradeDoc.output('blob')); n++; }
+      } catch (e) { console.warn('全年级 PDF 失败', e); }
+      ex.classIds.forEach(cid => {
+        const recs = (ex.scores || {})[cid] || [];
+        if (!recs.length) return;
+        try {
+          const doc = this._buildClassAnalysisPdf(ex, cid);
+          if (doc) { zip.file(`${clsName(cid)}-成绩分析报告.pdf`, doc.output('blob')); n++; }
+        } catch (e) { console.warn(clsName(cid) + ' PDF 失败', e); }
+      });
+      if (!n) { App.toast('没有可导出的成绩数据', 'err'); return; }
+      try {
+        const blob = await zip.generateAsync({ type: 'blob' });
+        App.downloadBlob(blob, `${ex.name}-成绩分析报告（含各班）.zip`);
+        App.toast(`已打包导出 ${n} 份 PDF`, 'ok');
+      } catch (e) { App.toast('打包失败：' + e.message, 'err'); }
+    }
   };
 })(typeof window !== 'undefined' ? window : globalThis);
