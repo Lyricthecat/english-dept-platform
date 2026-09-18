@@ -83,6 +83,30 @@
   App.mondayOf = d => { const x = new Date(d + 'T00:00:00'); const w = (x.getDay() + 6) % 7; return App.addDays(d, -w); };
   App.dowCN = d => ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date(d + 'T00:00:00').getDay()];
   App.lsSize = () => { let total = 0; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i), v = localStorage.getItem(k); total += (k ? k.length : 0) * 2 + (v ? v.length : 0) * 2; } return total; };
+  // 解析班级号 1-15（支持：1 / 01 / 1班 / 一班 / 801 / 801班 / 8(1)班 / 八年级1班 等写法）
+  App.parseClassNo = s => {
+    if (s == null || s === '') return null;
+    const str = String(s).trim();
+    const nums = str.match(/\d+/g);
+    if (nums) {
+      for (let i = nums.length - 1; i >= 0; i--) {
+        const n = parseInt(nums[i], 10);
+        if (n >= 1 && n <= 15) return String(n);      // "1" "01" "15" "1班" 中的 1~15
+        if (n >= 100 && n <= 999) {                     // "801"~"815" 三位数：取后两位为班号
+          const last2 = n % 100;
+          if (last2 >= 1 && last2 <= 15) return String(last2);
+        }
+      }
+    }
+    const cn = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五'];
+    const ci = cn.indexOf(str.replace(/班/g, ''));
+    return ci >= 1 && ci <= 15 ? String(ci) : null;
+  };
+  // 班级显示名：prefix 为空 → "1班"~"15班"；prefix='8' → "801班"~"815班"
+  App.className = (no, prefix) => {
+    const p = (prefix != null ? prefix : (App.DB && App.DB.state ? (App.DB.state.settings.classPrefix || '') : '')) || '';
+    return p ? p + String(no).padStart(2, '0') + '班' : no + '班';
+  };
   // 学期开始（周一）=> 第 N 周的周一日期
   App.weekMonday = (termStart, n) => App.addDays(App.mondayOf(termStart), (n - 1) * 7);
   App.weekRange = (termStart, n) => { const m = App.weekMonday(termStart, n); return { monday: m, sunday: App.addDays(m, 6) }; };

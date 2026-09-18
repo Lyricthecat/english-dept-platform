@@ -235,7 +235,7 @@
         ['15班', '20261501', '示例学生十五']];
       const s2 = [['全年级学生导入模板使用说明'],
         ['1. 表头固定为：班级 / 学号 / 姓名'],
-        ['2. 「班级」列填写 1-15 班（支持：1班、01班、一班、1 等写法），系统按班级自动分发'],
+        ['2. 「班级」列填写 1-15 班（支持：1班、01班、一班、1、801、801班、8(1)班 等写法），系统按班级自动分发'],
         ['3. 同一个学号重复导入会自动更新姓名，不重复的自动新增'],
         ['4. 班级列无法识别或缺少姓名的行会被跳过并在导入结果中提示']];
       XLSX.writeFile(App.makeWorkbook([
@@ -258,14 +258,7 @@
       const idx = key => header.findIndex(h => h.includes(key));
       const iCls = idx('班级') >= 0 ? idx('班级') : idx('班别');
       const iNo = idx('学号'), iName = idx('姓名');
-      const cn = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五'];
-      const parseCls = s => {
-        if (!s) return null;
-        const m = String(s).match(/(\d+)/);
-        if (m) { const n = parseInt(m[1], 10); return (n >= 1 && n <= 15) ? String(n) : null; }
-        const ci = cn.indexOf(String(s).replace(/班/g, ''));
-        return ci >= 1 && ci <= 15 ? String(ci) : null;
-      };
+      const parseCls = s => App.parseClassNo(s);
       const groups = {}, skipped = [];
       for (let r = hi + 1; r < rows.length; r++) {
         const cells = rows[r].map(c => String(c == null ? '' : c).trim());

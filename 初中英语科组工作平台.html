@@ -955,6 +955,30 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   App.mondayOf = d => { const x = new Date(d + 'T00:00:00'); const w = (x.getDay() + 6) % 7; return App.addDays(d, -w); };
   App.dowCN = d => ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date(d + 'T00:00:00').getDay()];
   App.lsSize = () => { let total = 0; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i), v = localStorage.getItem(k); total += (k ? k.length : 0) * 2 + (v ? v.length : 0) * 2; } return total; };
+  // 解析班级号 1-15（支持：1 / 01 / 1班 / 一班 / 801 / 801班 / 8(1)班 / 八年级1班 等写法）
+  App.parseClassNo = s => {
+    if (s == null || s === '') return null;
+    const str = String(s).trim();
+    const nums = str.match(/\d+/g);
+    if (nums) {
+      for (let i = nums.length - 1; i >= 0; i--) {
+        const n = parseInt(nums[i], 10);
+        if (n >= 1 && n <= 15) return String(n);      // "1" "01" "15" "1班" 中的 1~15
+        if (n >= 100 && n <= 999) {                     // "801"~"815" 三位数：取后两位为班号
+          const last2 = n % 100;
+          if (last2 >= 1 && last2 <= 15) return String(last2);
+        }
+      }
+    }
+    const cn = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五'];
+    const ci = cn.indexOf(str.replace(/班/g, ''));
+    return ci >= 1 && ci <= 15 ? String(ci) : null;
+  };
+  // 班级显示名：prefix 为空 → "1班"~"15班"；prefix='8' → "801班"~"815班"
+  App.className = (no, prefix) => {
+    const p = (prefix != null ? prefix : (App.DB && App.DB.state ? (App.DB.state.settings.classPrefix || '') : '')) || '';
+    return p ? p + String(no).padStart(2, '0') + '班' : no + '班';
+  };
   // 学期开始（周一）=> 第 N 周的周一日期
   App.weekMonday = (termStart, n) => App.addDays(App.mondayOf(termStart), (n - 1) * 7);
   App.weekRange = (termStart, n) => { const m = App.weekMonday(termStart, n); return { monday: m, sunday: App.addDays(m, 6) }; };
@@ -1113,6 +1137,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       settings: {
         schoolName: '初中英语科组',
         gradeName: '九年级',
+        classPrefix: '',   // 班级命名前缀：如 '8' → 801班~815班；留空 → 1班~15班
         termStart: App.mondayOf(App.today()),   // 学期开始（周一），用于周计划编号
         passPct: 60,      // 及格线（占满分百分比）
         goodPct: 85,      // 优秀线
@@ -1191,13 +1216,18 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       if (!this.state.classes || !this.state.classes.length) {
         this.state.classes = Array.from({ length: 15 }, (_, i) => ({
           id: String(i + 1),
-          name: (i + 1) + '班',
+          name: App.className(i + 1),
           students: []
         }));
         this.save();
       }
     },
     getClass(id) { return this.state.classes.find(c => c.id === String(id)) || null; },
+    // 按当前班级命名前缀刷新所有班级显示名
+    refreshClassNames() {
+      this.state.classes.forEach(c => { c.name = App.className(c.id); });
+      this.save('更新班级命名');
+    },
 
     /* ---------- IndexedDB 文件存储 ---------- */
     idbOpen() {
@@ -1935,7 +1965,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         ['15班', '20261501', '示例学生十五']];
       const s2 = [['全年级学生导入模板使用说明'],
         ['1. 表头固定为：班级 / 学号 / 姓名'],
-        ['2. 「班级」列填写 1-15 班（支持：1班、01班、一班、1 等写法），系统按班级自动分发'],
+        ['2. 「班级」列填写 1-15 班（支持：1班、01班、一班、1、801、801班、8(1)班 等写法），系统按班级自动分发'],
         ['3. 同一个学号重复导入会自动更新姓名，不重复的自动新增'],
         ['4. 班级列无法识别或缺少姓名的行会被跳过并在导入结果中提示']];
       XLSX.writeFile(App.makeWorkbook([
@@ -1958,14 +1988,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       const idx = key => header.findIndex(h => h.includes(key));
       const iCls = idx('班级') >= 0 ? idx('班级') : idx('班别');
       const iNo = idx('学号'), iName = idx('姓名');
-      const cn = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五'];
-      const parseCls = s => {
-        if (!s) return null;
-        const m = String(s).match(/(\d+)/);
-        if (m) { const n = parseInt(m[1], 10); return (n >= 1 && n <= 15) ? String(n) : null; }
-        const ci = cn.indexOf(String(s).replace(/班/g, ''));
-        return ci >= 1 && ci <= 15 ? String(ci) : null;
-      };
+      const parseCls = s => App.parseClassNo(s);
       const groups = {}, skipped = [];
       for (let r = hi + 1; r < rows.length; r++) {
         const cells = rows[r].map(c => String(c == null ? '' : c).trim());
@@ -2640,9 +2663,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
             const cells = rows[r].map(c => String(c == null ? '' : c).trim());
             const clsCell = cells[iCls];
             if (!clsCell) continue;
-            const num = (clsCell.match(/\d+/) || [null])[0];
-            if (!num) continue;
-            const cid = String(Math.min(Math.max(parseInt(num, 10), 1), 15));
+            const cid = App.parseClassNo(clsCell);
+            if (!cid) continue;
             if (!ex.classIds.includes(cid)) continue;
             (groups[cid] = groups[cid] || []).push(rows[r]);
           }
@@ -3760,6 +3782,10 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
           <div class="field"><label>科组名称</label><input type="text" id="stSchool" value="${App.esc(st.schoolName)}"></div>
           <div class="field"><label>年级</label><input type="text" id="stGrade" value="${App.esc(st.gradeName)}"></div>
         </div>
+        <div class="field"><label>班级命名前缀 <span class="hint">（留空显示 1班~15班；填「8」则显示 801班~815班，与 801/802 格式班级匹配）</span></label>
+          <input type="text" id="stPrefix" value="${App.esc(st.classPrefix || '')}" placeholder="如：8" style="max-width:160px">
+          <div class="tip">💡 保存后班级卡片、名单、导出的「班级」列都会用新命名；导入时仍能识别 1班 / 801 等多种写法。</div>
+        </div>
         <div class="form-grid">
           <div class="field"><label>学期开始日期（周一，用于周计划编号）</label><input type="date" id="stTerm" value="${App.esc(st.termStart)}"></div>
           <div class="field"><label>成绩分数线（占满分百分比）</label>
@@ -3838,14 +3864,19 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
 
       /* ---- 事件 ---- */
       App.$('#stSave').onclick = () => {
+        const newPrefix = App.$('#stPrefix').value.trim();
+        const prefixChanged = newPrefix !== (st.classPrefix || '');
         st.schoolName = App.$('#stSchool').value.trim() || '初中英语科组';
         st.gradeName = App.$('#stGrade').value.trim() || '九年级';
+        st.classPrefix = newPrefix;
         st.termStart = App.$('#stTerm').value || App.mondayOf(App.today());
         st.goodPct = +App.$('#stGood').value || 85;
         st.passPct = +App.$('#stPass').value || 60;
         st.lowPct = +App.$('#stLow').value || 40;
-        DB().save('更新设置');
-        App.toast('设置已保存', 'ok');
+        if (prefixChanged) DB().refreshClassNames();
+        else DB().save('更新设置');
+        App.toast(prefixChanged ? '设置已保存，班级命名已更新' : '设置已保存', 'ok');
+        App.reinitAll();
       };
       App.$('#stExport').onclick = () => {
         App.downloadText(DB().exportJSON(), `英语科组数据备份-${App.today()}.json`);

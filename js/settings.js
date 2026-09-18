@@ -24,6 +24,10 @@
           <div class="field"><label>科组名称</label><input type="text" id="stSchool" value="${App.esc(st.schoolName)}"></div>
           <div class="field"><label>年级</label><input type="text" id="stGrade" value="${App.esc(st.gradeName)}"></div>
         </div>
+        <div class="field"><label>班级命名前缀 <span class="hint">（留空显示 1班~15班；填「8」则显示 801班~815班，与 801/802 格式班级匹配）</span></label>
+          <input type="text" id="stPrefix" value="${App.esc(st.classPrefix || '')}" placeholder="如：8" style="max-width:160px">
+          <div class="tip">💡 保存后班级卡片、名单、导出的「班级」列都会用新命名；导入时仍能识别 1班 / 801 等多种写法。</div>
+        </div>
         <div class="form-grid">
           <div class="field"><label>学期开始日期（周一，用于周计划编号）</label><input type="date" id="stTerm" value="${App.esc(st.termStart)}"></div>
           <div class="field"><label>成绩分数线（占满分百分比）</label>
@@ -102,14 +106,19 @@
 
       /* ---- 事件 ---- */
       App.$('#stSave').onclick = () => {
+        const newPrefix = App.$('#stPrefix').value.trim();
+        const prefixChanged = newPrefix !== (st.classPrefix || '');
         st.schoolName = App.$('#stSchool').value.trim() || '初中英语科组';
         st.gradeName = App.$('#stGrade').value.trim() || '九年级';
+        st.classPrefix = newPrefix;
         st.termStart = App.$('#stTerm').value || App.mondayOf(App.today());
         st.goodPct = +App.$('#stGood').value || 85;
         st.passPct = +App.$('#stPass').value || 60;
         st.lowPct = +App.$('#stLow').value || 40;
-        DB().save('更新设置');
-        App.toast('设置已保存', 'ok');
+        if (prefixChanged) DB().refreshClassNames();
+        else DB().save('更新设置');
+        App.toast(prefixChanged ? '设置已保存，班级命名已更新' : '设置已保存', 'ok');
+        App.reinitAll();
       };
       App.$('#stExport').onclick = () => {
         App.downloadText(DB().exportJSON(), `英语科组数据备份-${App.today()}.json`);

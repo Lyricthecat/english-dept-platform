@@ -18,6 +18,7 @@
       settings: {
         schoolName: '初中英语科组',
         gradeName: '九年级',
+        classPrefix: '',   // 班级命名前缀：如 '8' → 801班~815班；留空 → 1班~15班
         termStart: App.mondayOf(App.today()),   // 学期开始（周一），用于周计划编号
         passPct: 60,      // 及格线（占满分百分比）
         goodPct: 85,      // 优秀线
@@ -96,13 +97,18 @@
       if (!this.state.classes || !this.state.classes.length) {
         this.state.classes = Array.from({ length: 15 }, (_, i) => ({
           id: String(i + 1),
-          name: (i + 1) + '班',
+          name: App.className(i + 1),
           students: []
         }));
         this.save();
       }
     },
     getClass(id) { return this.state.classes.find(c => c.id === String(id)) || null; },
+    // 按当前班级命名前缀刷新所有班级显示名
+    refreshClassNames() {
+      this.state.classes.forEach(c => { c.name = App.className(c.id); });
+      this.save('更新班级命名');
+    },
 
     /* ---------- IndexedDB 文件存储 ---------- */
     idbOpen() {

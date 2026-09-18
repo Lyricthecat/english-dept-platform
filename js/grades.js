@@ -391,9 +391,8 @@
             const cells = rows[r].map(c => String(c == null ? '' : c).trim());
             const clsCell = cells[iCls];
             if (!clsCell) continue;
-            const num = (clsCell.match(/\d+/) || [null])[0];
-            if (!num) continue;
-            const cid = String(Math.min(Math.max(parseInt(num, 10), 1), 15));
+            const cid = App.parseClassNo(clsCell);
+            if (!cid) continue;
             if (!ex.classIds.includes(cid)) continue;
             (groups[cid] = groups[cid] || []).push(rows[r]);
           }
