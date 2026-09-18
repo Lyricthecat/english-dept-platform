@@ -285,7 +285,7 @@
       };
       const iNo = findCol('学号'), iName = findCol('姓名');
       const colMap = {}; // itemKey → col index
-      App.ITEM_KEYS.forEach(k => { const ci = findCol(App.itemLabel(k)); if (ci >= 0) colMap[k] = ci; });
+      App.ITEM_KEYS.forEach(k => { const ci = findCol(...App.itemAliases(k)); if (ci >= 0) colMap[k] = ci; });
       const iTotal = findCol('总分'), iRank = findCol('排名');
 
       const records = [];

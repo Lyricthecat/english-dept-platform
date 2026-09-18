@@ -17,10 +17,13 @@
     { key: 'sentence',  label: '完成句子' },
     { key: 'passage',   label: '短文填空' },
     { key: 'writing',   label: '作文' },
-    { key: 'speaking',  label: '口语' }
+    { key: 'speaking',  label: '听说' }
   ];
   App.ITEM_KEYS = App.ITEMS.map(i => i.key);
   App.itemLabel = k => (App.ITEMS.find(i => i.key === k) || {}).label || k;
+  // 题型别名（兼容旧模板 / 常见叫法）
+  App.ITEM_ALIASES = { speaking: ['听说', '口语', '听力口语', '听说考试'] };
+  App.itemAliases = k => [App.itemLabel(k), ...((App.ITEM_ALIASES || {})[k] || [])];
 
   // 资料分类
   App.MAT_CATEGORIES = ['课件', '教案', '试卷', '练习题', '默写卷', '背诵资料', '成绩'];
