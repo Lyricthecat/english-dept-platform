@@ -625,7 +625,26 @@
       return { avg: '平均分', max: '最高分', min: '最低分', range: '班内分差', median: '中位数', passRate: '及格率', goodRate: '优秀率', lowRate: '低分率', rate: '得分率' }[m] || m;
     },
 
-    /* ================= 单班成绩分析 ================= */
+    /* ================= 单班成绩分析（同层次对比） ================= */
+    // 计算单班的对比基准：默认同层次其他班，无分层则全年级其他班
+    _classCompare(ex, classId) {
+      const tier = App.tierOf(classId);
+      const tierIds = tier ? App.tierMembers(tier).filter(id => ex.classIds.includes(String(id))) : [];
+      let cmpIds = [], cmpLabel = '全年级';
+      if (tier) {
+        const others = tierIds.filter(id => String(id) !== String(classId));
+        if (others.length) { cmpIds = others; cmpLabel = tier + ' 层其他班'; }
+      }
+      if (!cmpIds.length) {
+        const others = ex.classIds.filter(id => String(id) !== String(classId));
+        if (others.length) { cmpIds = others; cmpLabel = '全年级其他班'; }
+        else { cmpIds = ex.classIds.slice(); cmpLabel = '全年级'; }
+      }
+      const cmpRecs = [];
+      cmpIds.forEach(cid => cmpRecs.push(...((ex.scores || {})[cid] || [])));
+      return { tier, tierIds, cmpIds, cmpLabel, cmpRecs };
+    },
+
     renderClassAnalysis(v) {
       const parts = this.view.split(':');
       const exId = parts[1], classId = parts[2];
@@ -636,22 +655,62 @@
       const recs = (ex.scores || {})[classId] || [];
       const thr = this.thresholds();
       const full = App.fullTotal(ex.fullMarks);
-      const allRecs = [];
-      ex.classIds.forEach(cid => allRecs.push(...((ex.scores || {})[cid] || [])));
-      const cs = this.computeClassStats(recs, ex.fullMarks, thr);
-      const gs = this.computeClassStats(allRecs, ex.fullMarks, thr);
 
-      // 统计摘要
+      // —— 对比基准（同层次）——
+      const cmpInfo = this._classCompare(ex, classId);
+      const { tier, tierIds, cmpLabel, cmpRecs } = cmpInfo;
+      const cs = this.computeClassStats(recs, ex.fullMarks, thr);
+      const gs = this.computeClassStats(cmpRecs, ex.fullMarks, thr);
+
+      // 统计摘要（含与同层次的差值）
+      const diffText = (mine, ref, isPct) => {
+        if (mine == null || ref == null) return '';
+        const d = isPct ? (mine - ref) * 100 : (mine - ref);
+        const sign = d >= 0 ? '+' : '';
+        const color = d >= 0 ? '#249966' : '#d64545';
+        return ` <span style="font-size:11px;color:${color}">(${sign}${App.fmt(d, 1)}${isPct ? '%' : ''})</span>`;
+      };
       const statCards = [
-        ['参考人数', cs.total.count + ' 人'],
-        ['平均分', App.fmt(cs.total.avg)],
-        ['最高分', cs.total.max != null ? cs.total.max : '—'],
-        ['最低分', cs.total.min != null ? cs.total.min : '—'],
-        ['中位数', App.fmt(cs.total.median)],
-        ['优秀率', App.fmtPct(cs.total.goodRate)],
-        ['及格率', App.fmtPct(cs.total.passRate)],
-        ['低分率', App.fmtPct(cs.total.lowRate)]
-      ].map(([k, val]) => `<div class="stat-item"><div class="k">${k}</div><div class="v">${val}</div></div>`).join('');
+        ['参考人数', cs.total.count + ' 人', ''],
+        ['平均分', App.fmt(cs.total.avg), diffText(cs.total.avg, gs.total.avg, false)],
+        ['最高分', cs.total.max != null ? cs.total.max : '—', gs.total.max != null ? ` <span style="font-size:11px;color:#7c9185">(${cmpLabel} ${gs.total.max})</span>` : ''],
+        ['最低分', cs.total.min != null ? cs.total.min : '—', gs.total.min != null ? ` <span style="font-size:11px;color:#7c9185">(${cmpLabel} ${gs.total.min})</span>` : ''],
+        ['中位数', App.fmt(cs.total.median), diffText(cs.total.median, gs.total.median, false)],
+        ['优秀率', App.fmtPct(cs.total.goodRate), diffText(cs.total.goodRate, gs.total.goodRate, true)],
+        ['及格率', App.fmtPct(cs.total.passRate), diffText(cs.total.passRate, gs.total.passRate, true)],
+        ['低分率', App.fmtPct(cs.total.lowRate), diffText(cs.total.lowRate, gs.total.lowRate, true)]
+      ].map(([k, val, extra]) => `<div class="stat-item"><div class="k">${k}</div><div class="v">${val}${extra}</div></div>`).join('');
+
+      // —— 同层次各班对比表 ——
+      let tierTable = '';
+      if (tier && tierIds.length) {
+        const tierAll = [];
+        tierIds.forEach(cid => tierAll.push(...((ex.scores || {})[cid] || [])));
+        const ts = this.computeClassStats(tierAll, ex.fullMarks, thr).total;
+        const rows = tierIds.map(cid => {
+          const st = this.computeClassStats((ex.scores || {})[cid] || [], ex.fullMarks, thr).total;
+          const isSelf = String(cid) === String(classId);
+          const nm = (DB().getClass(cid) || { name: cid + '班' }).name;
+          return `<tr${isSelf ? ' class="row-top"' : ''}>
+            <td>${isSelf ? '▶ ' : ''}<b>${App.esc(nm)}</b>${isSelf ? ' <span class="badge green">本班</span>' : ''}</td>
+            <td class="num">${st.count}</td><td class="num">${App.fmt(st.avg)}</td>
+            <td class="num">${st.max != null ? st.max : '—'}</td><td class="num">${st.min != null ? st.min : '—'}</td>
+            <td class="num">${App.fmt(st.median)}</td><td class="num">${App.fmtPct(st.goodRate)}</td>
+            <td class="num">${App.fmtPct(st.passRate)}</td><td class="num">${App.fmtPct(st.lowRate)}</td></tr>`;
+        }).join('');
+        const totalRow = `<tr class="row-good"><td>🏆 ${tier} 层合计（${tierIds.length} 个班）</td>
+          <td class="num"><b>${ts.count}</b></td><td class="num"><b>${App.fmt(ts.avg)}</b></td>
+          <td class="num"><b>${ts.max != null ? ts.max : '—'}</b></td><td class="num"><b>${ts.min != null ? ts.min : '—'}</b></td>
+          <td class="num"><b>${App.fmt(ts.median)}</b></td><td class="num"><b>${App.fmtPct(ts.goodRate)}</b></td>
+          <td class="num"><b>${App.fmtPct(ts.passRate)}</b></td><td class="num"><b>${App.fmtPct(ts.lowRate)}</b></td></tr>`;
+        tierTable = `
+      <div class="card">
+        <div class="card-title">🏫 同层次各班对比 <span class="hint">（${tier} 层：${tierIds.map(cid => App.esc((DB().getClass(cid) || { name: cid + '班' }).name)).join('、')}）</span></div>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>班级</th><th class="num">参考人数</th><th class="num">平均分</th><th class="num">最高分</th><th class="num">最低分</th><th class="num">中位数</th><th class="num">优秀率</th><th class="num">及格率</th><th class="num">低分率</th></tr></thead>
+          <tbody>${rows}${totalRow}</tbody></table></div>
+      </div>`;
+      }
 
       // 排名明细表
       const sorted = [...recs].sort((a, b) => (b.total != null ? b.total : -1) - (a.total != null ? a.total : -1));
@@ -667,33 +726,36 @@
         <div class="flex">
           <div class="card-title" style="margin:0;font-size:19px">📈 ${App.esc(clsLabel)} · 成绩分析</div>
           <div class="spacer"></div>
+          ${tier ? `<span class="badge green">${tier} 层</span>` : '<span class="badge gray">未分层</span>'}
           <span class="badge green">${App.esc(ex.name)}</span>
           <span class="badge gray">满分 ${full} 分</span>
           <button class="btn btn-ghost btn-sm" data-act="exportClassAnalysis">📊 导出本班分析 Excel</button>
         </div>
         <div class="stat-strip mt12">${statCards}</div>
+        <div class="small muted mt8">💡 下图与表均为「本班」与「${App.esc(cmpLabel)}」对比${tier ? `（分层可在设置中调整）` : '（未配置班级分层，可在设置中配置）'}</div>
       </div>
+${tierTable}
       <div class="chart-grid">
         <div class="chart-card">
-          <h4>🕸 各题型得分率（本班 vs 全年级）
+          <h4>🕸 各题型得分率（本班 vs ${App.esc(cmpLabel)}）
             <span><button class="btn btn-xs btn-ghost" data-act="pngCaRadar">⬇ PNG</button></span>
           </h4>
           <div class="chart-box tall"><canvas id="chCaRadar"></canvas></div>
         </div>
         <div class="chart-card">
-          <h4>📊 各题型平均分（本班 vs 全年级）
+          <h4>📊 各题型平均分（本班 vs ${App.esc(cmpLabel)}）
             <span><button class="btn btn-xs btn-ghost" data-act="pngCaRate">⬇ PNG</button></span>
           </h4>
           <div class="chart-box tall"><canvas id="chCaRate"></canvas></div>
         </div>
         <div class="chart-card">
-          <h4>📦 总分分布箱线图（本班 vs 全年级）
+          <h4>📦 总分分布箱线图（本班 vs ${App.esc(cmpLabel)}）
             <span><button class="btn btn-xs btn-ghost" data-act="pngCaBox">⬇ PNG</button></span>
           </h4>
           <div class="chart-box"><canvas id="chCaBox"></canvas></div>
         </div>
         <div class="chart-card">
-          <h4>🔢 各分段人数（本班 vs 全年级）
+          <h4>🔢 各分段人数（本班 vs ${App.esc(cmpLabel)}）
             <span><button class="btn btn-xs btn-ghost" data-act="pngCaHist">⬇ PNG</button></span>
           </h4>
           <div class="chart-box tall"><canvas id="chCaHist"></canvas></div>
@@ -721,10 +783,9 @@
         }
       });
 
-      // —— 绘制图表（本班 vs 全年级）——
-      const palette = ['#249966', '#d9a013'];
+      // —— 绘制图表（本班 vs 同层次）——
       const clsTotals = recs.map(r => App.num(r.total)).filter(v => v != null);
-      const gradeTotals = allRecs.map(r => App.num(r.total)).filter(v => v != null);
+      const cmpTotals = cmpRecs.map(r => App.num(r.total)).filter(v => v != null);
 
       // 1. 雷达图：各题型得分率
       App.newChart(App.$('#chCaRadar'), {
@@ -733,7 +794,7 @@
           labels: App.ITEMS.map(i => i.label),
           datasets: [
             { label: clsLabel, data: App.ITEM_KEYS.map(k => cs[k].rate != null ? +(cs[k].rate * 100).toFixed(1) : 0), borderColor: '#249966', backgroundColor: 'rgba(36,153,102,.15)', pointRadius: 3 },
-            { label: '全年级', data: App.ITEM_KEYS.map(k => gs[k].rate != null ? +(gs[k].rate * 100).toFixed(1) : 0), borderColor: '#d9a013', backgroundColor: 'rgba(217,160,19,.10)', pointRadius: 2, borderDash: [6, 4] }
+            { label: cmpLabel, data: App.ITEM_KEYS.map(k => gs[k].rate != null ? +(gs[k].rate * 100).toFixed(1) : 0), borderColor: '#d9a013', backgroundColor: 'rgba(217,160,19,.10)', pointRadius: 2, borderDash: [6, 4] }
           ]
         },
         options: {
@@ -749,21 +810,21 @@
           labels: [...App.ITEMS.map(i => i.label), '总分'],
           datasets: [
             { label: clsLabel, data: [...App.ITEM_KEYS.map(k => cs[k].avg != null ? +cs[k].avg.toFixed(1) : 0), cs.total.avg != null ? +cs.total.avg.toFixed(1) : 0], backgroundColor: '#34b57e' },
-            { label: '全年级', data: [...App.ITEM_KEYS.map(k => gs[k].avg != null ? +gs[k].avg.toFixed(1) : 0), gs.total.avg != null ? +gs.total.avg.toFixed(1) : 0], backgroundColor: '#f0b429' }
+            { label: cmpLabel, data: [...App.ITEM_KEYS.map(k => gs[k].avg != null ? +gs[k].avg.toFixed(1) : 0), gs.total.avg != null ? +gs.total.avg.toFixed(1) : 0], backgroundColor: '#f0b429' }
           ]
         },
         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true } } }
       });
-      // 3. 箱线图：本班 vs 全年级
+      // 3. 箱线图：本班 vs 同层次
       const boxOk = window.ChartBoxPlot || (Chart && Chart.BoxPlotController);
       if (boxOk) {
         App.newChart(App.$('#chCaBox'), {
           type: 'boxplot',
           data: {
-            labels: [clsLabel, '全年级'],
+            labels: [clsLabel, cmpLabel],
             datasets: [{
               label: '总分分布',
-              data: [App.boxplotData(clsTotals), App.boxplotData(gradeTotals)],
+              data: [App.boxplotData(clsTotals), App.boxplotData(cmpTotals)],
               backgroundColor: 'rgba(52,181,126,.35)',
               borderColor: '#249966', borderWidth: 1.5, outlierColor: '#d64545', itemRadius: 3
             }]
@@ -780,7 +841,7 @@
       } else {
         const b = App.$('#chCaBox'); if (b) b.parentElement.innerHTML = '<div style="padding:40px;text-align:center;color:#8aa096">箱线图插件未加载</div>';
       }
-      // 4. 各分段人数（本班 vs 全年级，分组柱状）
+      // 4. 各分段人数（本班 vs 同层次）
       const segs = App.scoreSegments(full);
       const countSeg = (arr) => segs.map((_, si) => arr.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0));
       App.newChart(App.$('#chCaHist'), {
@@ -789,7 +850,7 @@
           labels: segs.map(s => s.label),
           datasets: [
             { label: clsLabel, data: countSeg(recs), backgroundColor: '#34b57e' },
-            { label: '全年级', data: countSeg(allRecs), backgroundColor: '#f0b429' }
+            { label: cmpLabel, data: countSeg(cmpRecs), backgroundColor: '#f0b429' }
           ]
         },
         options: {
@@ -806,24 +867,34 @@
       const recs = (ex.scores || {})[classId] || [];
       const thr = this.thresholds();
       const full = App.fullTotal(ex.fullMarks);
-      const allRecs = [];
-      ex.classIds.forEach(cid => allRecs.push(...((ex.scores || {})[cid] || [])));
+      const cmpInfo = this._classCompare(ex, classId);
+      const { tier, tierIds, cmpLabel, cmpRecs } = cmpInfo;
       const cs = this.computeClassStats(recs, ex.fullMarks, thr);
-      const gs = this.computeClassStats(allRecs, ex.fullMarks, thr);
+      const gs = this.computeClassStats(cmpRecs, ex.fullMarks, thr);
       const keyLabel = k => k === 'total' ? '总分' : App.itemLabel(k);
       const keys = [...App.ITEM_KEYS, 'total'];
       const s1 = [['指标', ...keys.map(keyLabel), '平均分', '最高分', '最低分', '中位数', '优秀率', '及格率', '低分率', '得分率'],
         [clsLabel, ...keys.map(k => this.metricVal(cs[k], 'avg')), ...['avg', 'max', 'min', 'median', 'goodRate', 'passRate', 'lowRate', 'rate'].map(m => this.metricVal(cs.total, m))],
-        ['全年级', ...keys.map(k => this.metricVal(gs[k], 'avg')), ...['avg', 'max', 'min', 'median', 'goodRate', 'passRate', 'lowRate', 'rate'].map(m => this.metricVal(gs.total, m))]];
+        [cmpLabel, ...keys.map(k => this.metricVal(gs[k], 'avg')), ...['avg', 'max', 'min', 'median', 'goodRate', 'passRate', 'lowRate', 'rate'].map(m => this.metricVal(gs.total, m))]];
       const s2 = [[...TEMPLATE_HEADER], ...recs.map(r => [clsLabel, r.no || '', r.name || '', ...App.ITEM_KEYS.map(k => r[k] != null ? r[k] : ''), r.total != null ? r.total : '', r.rank != null ? r.rank : ''])];
       const segs = App.scoreSegments(full);
       const countSeg = arr => segs.map((_, si) => arr.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0));
-      const s3 = [['分数段', clsLabel, '全年级'], ...segs.map((seg, si) => [seg.label, countSeg(recs)[si], countSeg(allRecs)[si]])];
-      XLSX.writeFile(App.makeWorkbook([
+      const s3 = [['分数段', clsLabel, cmpLabel], ...segs.map((seg, si) => [seg.label, countSeg(recs)[si], countSeg(cmpRecs)[si]])];
+      // 同层次各班对比
+      const sheets = [
         { name: '统计对比', aoa: s1, widths: [10, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9] },
         { name: '成绩明细', aoa: s2, widths: [8, 12, 12, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 8] },
         { name: '各分段人数', aoa: s3, widths: [10, 10, 10] }
-      ]), `${ex.name}-${clsLabel}成绩分析.xlsx`);
+      ];
+      if (tier && tierIds.length) {
+        const s4 = [['班级', '参考人数', '平均分', '最高分', '最低分', '中位数', '优秀率', '及格率', '低分率'],
+          ...tierIds.map(cid => {
+            const st = this.computeClassStats((ex.scores || {})[cid] || [], ex.fullMarks, thr).total;
+            return [(DB().getClass(cid) || { name: cid + '班' }).name, st.count, st.avg != null ? +st.avg.toFixed(1) : '', st.max ?? '', st.min ?? '', st.median != null ? +st.median.toFixed(1) : '', st.goodRate != null ? +(st.goodRate * 100).toFixed(1) + '%' : '', st.passRate != null ? +(st.passRate * 100).toFixed(1) + '%' : '', st.lowRate != null ? +(st.lowRate * 100).toFixed(1) + '%' : ''];
+          })];
+        sheets.push({ name: tier + '层各班对比', aoa: s4, widths: [10, 10, 9, 9, 9, 9, 9, 9, 9] });
+      }
+      XLSX.writeFile(App.makeWorkbook(sheets), `${ex.name}-${clsLabel}成绩分析.xlsx`);
       App.toast('本班分析已导出 Excel', 'ok');
     },
 

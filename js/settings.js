@@ -28,6 +28,14 @@
           <input type="text" id="stPrefix" value="${App.esc(st.classPrefix || '')}" placeholder="如：8" style="max-width:160px">
           <div class="tip">💡 保存后班级卡片、名单、导出的「班级」列都会用新命名；导入时仍能识别 1班 / 801 等多种写法。</div>
         </div>
+        <div class="field"><label>班级分层 <span class="hint">（单班分析时与<b>同层次</b>班级对比；支持 1-4,7-10 范围简写）</span></label>
+          <div class="flex">
+            <span class="badge green">A 层</span><input type="text" id="stTierA" value="${App.esc((st.classTiers && st.classTiers.A) || '')}" placeholder="如 11,12" style="width:180px;padding:9px 12px;border:1.5px solid var(--line);border-radius:9px">
+            <span class="badge green">B 层</span><input type="text" id="stTierB" value="${App.esc((st.classTiers && st.classTiers.B) || '')}" placeholder="如 5,6" style="width:180px;padding:9px 12px;border:1.5px solid var(--line);border-radius:9px">
+            <span class="badge green">C 层</span><input type="text" id="stTierC" value="${App.esc((st.classTiers && st.classTiers.C) || '')}" placeholder="如 1-4,7-10,13-15" style="width:260px;padding:9px 12px;border:1.5px solid var(--line);border-radius:9px">
+          </div>
+          <div class="tip" id="stTierInfo"></div>
+        </div>
         <div class="form-grid">
           <div class="field"><label>学期开始日期（周一，用于周计划编号）</label><input type="date" id="stTerm" value="${App.esc(st.termStart)}"></div>
           <div class="field"><label>成绩分数线（占满分百分比）</label>
@@ -105,12 +113,31 @@
       </div>`;
 
       /* ---- 事件 ---- */
+      /* ---- 班级分层实时预览 ---- */
+      const updTierInfo = () => {
+        const info = App.$('#stTierInfo');
+        if (!info) return;
+        const parts = ['A', 'B', 'C'].map(t => {
+          const el = App.$('#stTier' + t);
+          const ids = App.parseClassList(el ? el.value : '');
+          return `${t} 层 ${ids.length} 个班` + (ids.length ? `（${ids.map(i => i + '班').join('、')}）` : '');
+        });
+        info.textContent = '📌 ' + parts.join('　·　');
+      };
+      ['A', 'B', 'C'].forEach(t => { const el = App.$('#stTier' + t); if (el) el.oninput = updTierInfo; });
+      updTierInfo();
+
       App.$('#stSave').onclick = () => {
         const newPrefix = App.$('#stPrefix').value.trim();
         const prefixChanged = newPrefix !== (st.classPrefix || '');
         st.schoolName = App.$('#stSchool').value.trim() || '初中英语科组';
         st.gradeName = App.$('#stGrade').value.trim() || '九年级';
         st.classPrefix = newPrefix;
+        st.classTiers = {
+          A: App.$('#stTierA').value.trim(),
+          B: App.$('#stTierB').value.trim(),
+          C: App.$('#stTierC').value.trim()
+        };
         st.termStart = App.$('#stTerm').value || App.mondayOf(App.today());
         st.goodPct = +App.$('#stGood').value || 85;
         st.passPct = +App.$('#stPass').value || 60;

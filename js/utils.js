@@ -130,6 +130,35 @@
     const p = (prefix != null ? prefix : (App.DB && App.DB.state ? (App.DB.state.settings.classPrefix || '') : '')) || '';
     return p ? p + String(no).padStart(2, '0') + '班' : no + '班';
   };
+  // 解析班级列表输入："1-4,7-10,13-15" 或 "5,6" → ['1','2','3','4','7',...]
+  App.parseClassList = s => {
+    const out = [];
+    String(s == null ? '' : s).split(/[,，、;；\s]+/).forEach(part => {
+      if (!part) return;
+      const m = part.match(/^(\d+)\s*[-~－—至]\s*(\d+)$/);
+      if (m) {
+        const a = +m[1], b = +m[2];
+        for (let i = Math.min(a, b); i <= Math.max(a, b); i++) if (i >= 1 && i <= 15) out.push(String(i));
+      } else {
+        const n = parseInt((part.match(/\d+/) || [])[0], 10);
+        if (n >= 1 && n <= 15) out.push(String(n));
+      }
+    });
+    return [...new Set(out)];
+  };
+  // 班级所属层次（A/B/C…），未配置返回 null
+  App.tierOf = classId => {
+    const tiers = (App.DB && App.DB.state ? (App.DB.state.settings.classTiers || {}) : {});
+    for (const t of Object.keys(tiers)) {
+      if (App.parseClassList(tiers[t]).includes(String(classId))) return t;
+    }
+    return null;
+  };
+  // 某层次包含的班级 id 数组
+  App.tierMembers = tier => {
+    const tiers = (App.DB && App.DB.state ? (App.DB.state.settings.classTiers || {}) : {});
+    return App.parseClassList(tiers[tier] || '');
+  };
   // 学期开始（周一）=> 第 N 周的周一日期
   App.weekMonday = (termStart, n) => App.addDays(App.mondayOf(termStart), (n - 1) * 7);
   App.weekRange = (termStart, n) => { const m = App.weekMonday(termStart, n); return { monday: m, sunday: App.addDays(m, 6) }; };

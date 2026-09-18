@@ -19,6 +19,8 @@
         schoolName: '初中英语科组',
         gradeName: '九年级',
         classPrefix: '',   // 班级命名前缀：如 '8' → 801班~815班；留空 → 1班~15班
+        // 班级分层（同层次对比用）：支持 "1-4,7-10" 简写
+        classTiers: { A: '11,12', B: '5,6', C: '1-4,7-10,13-15' },
         termStart: App.mondayOf(App.today()),   // 学期开始（周一），用于周计划编号
         passPct: 60,      // 及格线（占满分百分比）
         goodPct: 85,      // 优秀线
