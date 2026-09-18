@@ -77,6 +77,29 @@
       outliers: a.filter(v => v < loF || v > hiF)
     };
   };
+  // 分数分段（从高到低，每 10 分一段，最后一段汇总低分段）
+  // 满分 120 → ["120-110","110-100",...,"40-30","30-0"]
+  App.scoreSegments = full => {
+    const segs = [];
+    let hi = full;
+    for (let i = 0; i < 9 && hi > 0; i++) {
+      const lo = hi - 10;
+      segs.push({ label: `${hi}-${lo}`, min: lo, max: hi });
+      hi = lo;
+    }
+    if (hi > 0) segs.push({ label: `${hi}-0`, min: 0, max: hi });
+    return segs;
+  };
+  // 分数所属分段索引（0=最高分段，依次递增，最后一段为低分段汇总）
+  App.scoreBinIndex = (v, full) => {
+    if (v == null || isNaN(v) || v < 0) return -1;
+    if (v >= full) return 0;
+    for (let i = 0; i < 9; i++) {
+      const low = full - (i + 1) * 10;
+      if (v >= low) return i;
+    }
+    return 9;
+  };
 
   /* ---------------- 日期工具 ---------------- */
   App.addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };

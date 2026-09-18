@@ -741,7 +741,7 @@
           <div class="chart-box"><canvas id="chSeg"></canvas></div>
         </div>
         <div class="chart-card wide">
-          <h4>🔢 成绩分布直方图（每 10 分一段 · 所选班级合计）
+          <h4>🔢 各分段人数（120-110 · 110-100 · … · 40-30 · 30-0，堆叠显示各班）
             <span class="flex"><button class="btn btn-xs btn-ghost" data-act="pngHist">⬇ PNG</button></span>
           </h4>
           <div class="chart-box tall"><canvas id="chHist"></canvas></div>
@@ -925,26 +925,29 @@
           scales: { r: { min: 0, max: 100, ticks: { stepSize: 20, callback: v => v + '%' }, pointLabels: { font: { size: 12 } } } }
         }
       });
-      // 7. 成绩分布直方图（每 10 分一段）
-      const bin = Math.max(1, Math.round(full / 10));
-      const binLabels = Array.from({ length: bin }, (_, i) => `${i * 10}~${i === bin - 1 ? full : (i + 1) * 10}`);
-      const histCounts = binLabels.map(() => 0);
-      selIds.forEach(cid => ((ex.scores || {})[cid] || []).forEach(r => {
-        const v = App.num(r.total);
-        if (v == null) return;
-        const idx = Math.min(bin - 1, Math.floor(v / 10));
-        histCounts[idx]++;
+      // 7. 各分段人数（每 10 分一段，从高到低，堆叠显示各班）
+      const segs = App.scoreSegments(full);
+      const histDs = selIds.map((cid, i) => ({
+        label: clsName(cid),
+        data: segs.map(() => 0),
+        backgroundColor: palette[i % palette.length]
       }));
+      selIds.forEach((cid, di) => {
+        ((ex.scores || {})[cid] || []).forEach(r => {
+          const idx = App.scoreBinIndex(App.num(r.total), full);
+          if (idx >= 0) histDs[di].data[idx]++;
+        });
+      });
       App.newChart(App.$('#chHist'), {
         type: 'bar',
-        data: {
-          labels: binLabels,
-          datasets: [{ label: '人数', data: histCounts, backgroundColor: App.chartPalette(bin), borderRadius: 4 }]
-        },
+        data: { labels: segs.map(s => s.label), datasets: histDs },
         options: {
           responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.parsed.y + ' 人' } } },
-          scales: { y: { beginAtZero: true, title: { display: true, text: '人数' } }, x: { title: { display: true, text: '分数段' } } }
+          plugins: {
+            legend: { position: 'top', labels: { boxWidth: 12, font: { size: 10 } } },
+            tooltip: { callbacks: { label: c => c.dataset.label + '：' + c.parsed.y + ' 人' } }
+          },
+          scales: { x: { stacked: true, title: { display: true, text: '分数段（从高到低）' } }, y: { stacked: true, beginAtZero: true, title: { display: true, text: '人数' } } }
         }
       });
     },
@@ -1012,12 +1015,29 @@
       const s5 = [['题型', '满分', '平均分', '难度系数', '区分度', '诊断建议'],
         ...(q && !q.error ? q.rows.map(r => [r.label, r.full, r.avg != null ? +r.avg.toFixed(1) : '', r.difficulty != null ? +r.difficulty.toFixed(2) : '', r.discrimination != null ? +r.discrimination.toFixed(2) : '', r.advice]) : [['—', '', '', '', '', q && q.error ? q.error : '暂无成绩数据']])];
 
+      // Sheet6 各分段人数（每 10 分一段，从高到低）
+      const segs6 = App.scoreSegments(full);
+      const segRows = segs6.map((seg, si) => {
+        const row = [seg.label];
+        allIds.forEach(cid => {
+          let cnt = 0;
+          ((ex.scores || {})[cid] || []).forEach(r => { if (App.scoreBinIndex(App.num(r.total), full) === si) cnt++; });
+          row.push(cnt);
+        });
+        let totalCnt = 0;
+        allRecs.forEach(r => { if (App.scoreBinIndex(App.num(r.total), full) === si) totalCnt++; });
+        row.push(totalCnt);
+        return row;
+      });
+      const s6 = [['分数段', ...allIds.map(cid => clsName(cid)), '全年级'], ...segRows];
+
       XLSX.writeFile(App.makeWorkbook([
         { name: '综合比对', aoa: s1, widths: [8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 10] },
         { name: '各班题型统计', aoa: s2, widths: [8, 10, 7, 9, 9, 9, 9, 9, 9, 9, 9, 9] },
         { name: '分数段统计', aoa: s3, widths: [8, 10, 10, 10, 10] },
         { name: '学生成绩明细', aoa: s4, widths: [8, 12, 12, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 8] },
-        { name: '试卷质量分析', aoa: s5, widths: [10, 8, 9, 9, 9, 30] }
+        { name: '试卷质量分析', aoa: s5, widths: [10, 8, 9, 9, 9, 30] },
+        { name: '各分段人数', aoa: s6, widths: [10, ...allIds.map(() => 8), 9] }
       ]), `${ex.name}-成绩比对分析.xlsx`);
       App.toast('分析报告已导出 Excel', 'ok');
     },
@@ -1157,7 +1177,7 @@
         chartImgs.forEach((img, i) => {
           page(ctx => {
             ctx.fillStyle = '#14503a'; ctx.font = 'bold 13px ' + FONT;
-            const titles = { chAvg: '各班总分平均分对比', chBox: '各班总分分布箱线图', chRadar: '各题型得分率雷达图', chHist: '成绩分布直方图' };
+            const titles = { chAvg: '各班总分平均分对比', chBox: '各班总分分布箱线图', chRadar: '各题型得分率雷达图', chHist: '各分段人数（每 10 分一段）' };
             const id = ['chAvg', 'chBox', 'chRadar', 'chHist'][i];
             ctx.fillText(titles[id] || '图表', px(40), px(44));
             const im = new Image();
