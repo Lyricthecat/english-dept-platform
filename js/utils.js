@@ -103,6 +103,11 @@
     }
     return 9;
   };
+  // 缺考 / 未录入：所有题型分数均为空（不计入平均分、最低分等统计）
+  App.isAbsent = rec => {
+    if (!rec) return true;
+    return App.ITEM_KEYS.every(k => rec[k] == null || rec[k] === '');
+  };
 
   /* ---------------- 日期工具 ---------------- */
   App.addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };

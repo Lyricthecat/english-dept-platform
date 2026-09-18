@@ -303,7 +303,13 @@
           if (v != null) hasAny = true;
         });
         let total = iTotal >= 0 ? App.num(cells[iTotal]) : null;
-        if (total == null && hasAny) total = App.ITEM_KEYS.reduce((s, k) => s + (rec[k] || 0), 0);
+        if (!hasAny) {
+          // 各题型全空 → 缺考：忽略总分列的 0，不计入统计
+          total = null;
+          rec.absent = true;
+        } else if (total == null) {
+          total = App.ITEM_KEYS.reduce((s, k) => s + (rec[k] || 0), 0);
+        }
         rec.total = total;
         rec.rank = iRank >= 0 ? App.num(cells[iRank]) : null;
         // 匹配学生档案：优先学号，其次姓名
@@ -519,7 +525,10 @@
             const v = App.num(tr.querySelector(`input[data-k="${k}"]`).value);
             rec[k] = v;
           });
-          rec.total = App.ITEM_KEYS.reduce((s, k) => s + (rec[k] || 0), 0);
+          // 所有题型都空 → 视为缺考，总分记 null（不计入统计）
+          const hasAny = App.ITEM_KEYS.some(k => rec[k] != null);
+          rec.total = hasAny ? App.ITEM_KEYS.reduce((s, k) => s + (rec[k] || 0), 0) : null;
+          if (!hasAny) rec.absent = true; else delete rec.absent;
           out.push(rec);
         });
         if (!ex.scores) ex.scores = {};
@@ -561,10 +570,13 @@
 
     // 计算一个班某题型/总分的统计指标（纯函数）
     computeClassStats(recs, fullMarks, thr) {
+      const all = recs || [];
+      // 缺考 / 未录入的学生不纳入统计（不算入最低分、平均分、参考人数等）
+      const valid = all.filter(r => !App.isAbsent(r));
       const keys = [...App.ITEM_KEYS, 'total'];
       const res = {};
       keys.forEach(k => {
-        const vals = recs.map(r => App.num(r[k]));
+        const vals = valid.map(r => App.num(r[k]));
         const st = App.statsOf(vals);
         const fm = k === 'total' ? App.fullTotal(fullMarks) : (fullMarks ? (fullMarks[k] || 0) : 0);
         const cnt = st.count;
@@ -580,6 +592,8 @@
           rate: fm ? (st.avg != null ? st.avg / fm : null) : null
         };
       });
+      res.absentN = all.length - valid.length;   // 缺考人数
+      res.totalRecs = all.length;                // 含缺考的总记录数
       return res;
     },
 
@@ -671,7 +685,7 @@
         return ` <span style="font-size:11px;color:${color}">(${sign}${App.fmt(d, 1)}${isPct ? '%' : ''})</span>`;
       };
       const statCards = [
-        ['参考人数', cs.total.count + ' 人', ''],
+        ['参考人数', cs.total.count + ' 人' + (cs.absentN ? `（缺考 ${cs.absentN} 人）` : ''), ''],
         ['平均分', App.fmt(cs.total.avg), diffText(cs.total.avg, gs.total.avg, false)],
         ['最高分', cs.total.max != null ? cs.total.max : '—', gs.total.max != null ? ` <span style="font-size:11px;color:#7c9185">(${cmpLabel} ${gs.total.max})</span>` : ''],
         ['最低分', cs.total.min != null ? cs.total.min : '—', gs.total.min != null ? ` <span style="font-size:11px;color:#7c9185">(${cmpLabel} ${gs.total.min})</span>` : ''],
@@ -714,10 +728,13 @@
 
       // 排名明细表
       const sorted = [...recs].sort((a, b) => (b.total != null ? b.total : -1) - (a.total != null ? a.total : -1));
-      const rankRows = sorted.length ? sorted.map((r, i) => `<tr>
-        <td class="num">${r.rank != null ? r.rank : i + 1}</td><td>${App.esc(r.no || '—')}</td><td><b>${App.esc(r.name)}</b></td>
-        ${App.ITEM_KEYS.map(k => `<td class="num">${r[k] != null ? App.fmt(r[k]) : '—'}</td>`).join('')}
-        <td class="num"><b>${r.total != null ? App.fmt(r.total) : '—'}</b></td></tr>`).join('')
+      const rankRows = sorted.length ? sorted.map((r, i) => {
+        const absent = App.isAbsent(r);
+        return `<tr${absent ? ' style="color:#a4b8ac"' : ''}>
+        <td class="num">${absent ? '缺考' : (r.rank != null ? r.rank : i + 1)}</td><td>${App.esc(r.no || '—')}</td><td><b>${App.esc(r.name)}</b></td>
+        ${App.ITEM_KEYS.map(k => `<td class="num">${absent ? '—' : (r[k] != null ? App.fmt(r[k]) : '—')}</td>`).join('')}
+        <td class="num"><b>${absent ? '缺考' : (r.total != null ? App.fmt(r.total) : '—')}</b></td></tr>`;
+      }).join('')
         : '<tr><td colspan="13" style="text-align:center;color:#8aa096;padding:22px">本班还没有成绩，请先「导入成绩」</td></tr>';
 
       v.innerHTML = `
@@ -921,12 +938,12 @@ ${tierTable}
       const nameCell = (label, bold) => `<td>${bold ? '🏆 ' : ''}<b>${App.esc(label)}</b></td>`;
 
       // —— 表格 A：各班成绩总览 ——
-      const headA = '<tr><th>班级</th><th class="num">参考人数</th><th class="num">平均分</th><th class="num">最高分</th><th class="num">最低分</th><th class="num">中位数</th><th class="num">班内分差</th><th class="num">优秀率</th><th class="num">及格率</th><th class="num">低分率</th><th class="num">得分率</th></tr>';
-      const rowA = (st, label, bold) => tr(nameCell(label, bold) +
-        td(st.count, bold) + td(App.fmt(st.avg), bold) + td(st.max != null ? st.max : '—', bold) + td(st.min != null ? st.min : '—', bold) +
+      const headA = '<tr><th>班级</th><th class="num">参考人数</th><th class="num">缺考</th><th class="num">平均分</th><th class="num">最高分</th><th class="num">最低分</th><th class="num">中位数</th><th class="num">班内分差</th><th class="num">优秀率</th><th class="num">及格率</th><th class="num">低分率</th><th class="num">得分率</th></tr>';
+      const rowA = (st, label, bold, absentN) => tr(nameCell(label, bold) +
+        td(st.count, bold) + td(absentN ? absentN : '—', bold) + td(App.fmt(st.avg), bold) + td(st.max != null ? st.max : '—', bold) + td(st.min != null ? st.min : '—', bold) +
         td(App.fmt(st.median), bold) + td(App.fmt(st.range), bold) + td(App.fmtPct(st.goodRate), bold) + td(App.fmtPct(st.passRate), bold) +
         td(App.fmtPct(st.lowRate), bold) + td(App.fmtPct(st.rate), bold), bold);
-      const rowsA = allIds.map(cid => rowA(statsMap[cid].total, clsName(cid), false)).join('') + rowA(gradeStats.total, '全年级', true);
+      const rowsA = allIds.map(cid => rowA(statsMap[cid].total, clsName(cid), false, statsMap[cid].absentN)).join('') + rowA(gradeStats.total, '全年级', true, gradeStats.absentN);
 
       // —— 表格 B：各班各题型得分率（%）——
       const headB = '<tr><th>班级</th>' + [...App.ITEMS.map(i => `<th class="num">${i.label}</th>`), '<th class="num">总分</th>'].join('') + '</tr>';
@@ -944,8 +961,10 @@ ${tierTable}
       const segs = App.scoreSegments(full);
       const countSeg = (recs, si) => recs.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0);
       const headD = '<tr><th>班级</th>' + segs.map(seg => `<th class="num">${seg.label}</th>`).join('') + '<th class="num">合计</th></tr>';
-      const rowD = (recs, label, bold) => tr(nameCell(label, bold) +
-        segs.map((seg, si) => td(countSeg(recs, si), bold)).join('') + td(recs.length, bold), bold);
+      const rowD = (recs, label, bold) => {
+        const validN = recs.filter(r => !App.isAbsent(r)).length;
+        return tr(nameCell(label, bold) + segs.map((seg, si) => td(countSeg(recs, si), bold)).join('') + td(validN, bold), bold);
+      };
       const rowsD = allIds.map(cid => rowD((ex.scores || {})[cid] || [], clsName(cid), false)).join('') + rowD(allRecs, '全年级', true);
 
       // —— 试卷质量分析 ——
@@ -1283,8 +1302,8 @@ ${tierTable}
       const segs6 = App.scoreSegments(full);
       const cntSeg = (recs, si) => recs.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0);
       const s6 = [['班级', ...segs6.map(s => s.label), '合计'],
-        ...allIds.map(cid => { const recs = (ex.scores || {})[cid] || []; return [clsName(cid), ...segs6.map((_, si) => cntSeg(recs, si)), recs.length]; }),
-        ['全年级', ...segs6.map((_, si) => cntSeg(allRecs, si)), allRecs.length]];
+        ...allIds.map(cid => { const recs = ((ex.scores || {})[cid] || []).filter(r => !App.isAbsent(r)); return [clsName(cid), ...segs6.map((_, si) => cntSeg(recs, si)), recs.length]; }),
+        ['全年级', ...segs6.map((_, si) => cntSeg(allRecs.filter(r => !App.isAbsent(r)), si)), allRecs.filter(r => !App.isAbsent(r)).length]];
 
       XLSX.writeFile(App.makeWorkbook([
         { name: '综合比对', aoa: s1, widths: [8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 10] },
@@ -1389,7 +1408,7 @@ ${tierTable}
       // 页1：总览 + 最高/最低/中位数
       this._pdfPage(P, ctx => {
         this._pdfTitle(ctx, P, `${st.schoolName} · ${ex.name} 成绩分析报告`,
-          `考试类型：${ex.type || '—'}　日期：${ex.date}　参考班级：${allIds.length} 个　参考人数：${allRecs.length} 人　满分：${full} 分`);
+          `考试类型：${ex.type || '—'}　日期：${ex.date}　参考班级：${allIds.length} 个　参考人数：${gs.total.count} 人${gs.absentN ? `（缺考 ${gs.absentN} 人）` : ''}　满分：${full} 分`);
         ctx.fillStyle = '#7c9185'; ctx.font = '11px ' + P.FONT;
         ctx.fillText(`全年级：平均分 ${App.fmt(gs.total.avg)} · 最高 ${gs.total.max ?? '—'} · 最低 ${gs.total.min ?? '—'} · 中位数 ${App.fmt(gs.total.median)} · 优秀率 ${App.fmtPct(gs.total.goodRate)} · 及格率 ${App.fmtPct(gs.total.passRate)} · 低分率 ${App.fmtPct(gs.total.lowRate)}`, P.PXM, 96);
         this._pdfSection(ctx, P, '一、各班成绩总览（总分）', 126);
@@ -1417,8 +1436,8 @@ ${tierTable}
         this._pdfSection(ctx, P, '四、各分段人数', y); y += 12;
         const segs = App.scoreSegments(full);
         const cntSeg = (recs, si) => recs.reduce((s, r) => s + (App.scoreBinIndex(App.num(r.total), full) === si ? 1 : 0), 0);
-        const rows4 = allIds.map(cid => { const recs = (ex.scores || {})[cid] || []; return [clsName(cid), ...segs.map((_, si) => cntSeg(recs, si)), recs.length]; });
-        rows4.push(['全年级', ...segs.map((_, si) => cntSeg(allRecs, si)), allRecs.length]);
+        const rows4 = allIds.map(cid => { const recs = ((ex.scores || {})[cid] || []).filter(r => !App.isAbsent(r)); return [clsName(cid), ...segs.map((_, si) => cntSeg(recs, si)), recs.length]; });
+        rows4.push(['全年级', ...segs.map((_, si) => cntSeg(allRecs.filter(r => !App.isAbsent(r)), si)), allRecs.filter(r => !App.isAbsent(r)).length]);
         this._pdfTable(ctx, P.PXM, y, [58, ...Array(11).fill(60)], ['班级', ...segs.map(s => s.label), '合计'], rows4, { fontSize: 9.5 });
       }, foot);
 
@@ -1505,7 +1524,8 @@ ${tierTable}
         const segs = App.scoreSegments(full);
         const cntSeg = (arr, si) => arr.reduce((s, x) => s + (App.scoreBinIndex(App.num(x.total), full) === si ? 1 : 0), 0);
         const rows4 = segs.map((seg, si) => [seg.label, cntSeg(recs, si), cntSeg(cmpRecs, si), cntSeg(recs, si) + cntSeg(cmpRecs, si)]);
-        rows4.push(['合计', recs.length, cmpRecs.length, recs.length + cmpRecs.length]);
+        const validN = a => a.filter(r => !App.isAbsent(r)).length;
+        rows4.push(['合计', validN(recs), validN(cmpRecs), validN(recs) + validN(cmpRecs)]);
         this._pdfTable(ctx, P.PXM, y, [130, 194, 194, 196], ['分数段', clsLabel, cmpLabel, '合计'], rows4, { fontSize: 10 });
       }, foot);
 
@@ -1513,7 +1533,10 @@ ${tierTable}
       this._pdfPage(P, ctx => {
         this._pdfSection(ctx, P, '五、本班成绩排名明细', 48);
         const sorted = [...recs].sort((a, b) => (b.total != null ? b.total : -1) - (a.total != null ? a.total : -1));
-        const rows5 = sorted.map((r, i) => [r.rank != null ? r.rank : i + 1, r.no || '—', r.name, ...App.ITEM_KEYS.map(k => r[k] != null ? App.fmt(r[k]) : '—'), r.total != null ? App.fmt(r.total) : '—']);
+        const rows5 = sorted.map((r, i) => {
+          const ab = App.isAbsent(r);
+          return [ab ? '缺考' : (r.rank != null ? r.rank : i + 1), r.no || '—', r.name, ...App.ITEM_KEYS.map(k => ab ? '—' : (r[k] != null ? App.fmt(r[k]) : '—')), ab ? '缺考' : (r.total != null ? App.fmt(r.total) : '—')];
+        });
         const shown = rows5.slice(0, 32);
         this._pdfTable(ctx, P.PXM, 60, [46, 76, 76, ...Array(9).fill(52), 58], ['排名', '学号', '姓名', ...App.ITEMS.map(i => i.label), '总分'], shown, { fontSize: 9 });
         if (rows5.length > shown.length) {
