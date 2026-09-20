@@ -665,18 +665,44 @@
       return { avg: '平均分', max: '最高分', min: '最低分', range: '班内分差', median: '中位数', passRate: '及格率', goodRate: '优秀率', lowRate: '低分率', rate: '得分率' }[m] || m;
     },
 
-    // 每行题型得分率的弱势（最低2）/ 优势（最高2）标记：{itemKey: 'low'|'high'}
-    _rateMarks(st) {
-      const arr = App.ITEM_KEYS.map(k => ({ k, r: st[k].rate })).filter(x => x.r != null);
-      if (arr.length < 5) return {};
-      const sorted = [...arr].sort((a, b) => a.r - b.r);
-      const low = sorted.slice(0, 2).map(x => x.k);
-      const high = sorted.slice(-2).map(x => x.k);
-      if (low.some(k => high.includes(k))) return {};
-      const m = {};
-      low.forEach(k => { m[k] = 'low'; });
-      high.forEach(k => { m[k] = 'high'; });
-      return m;
+    // 各题型得分率相对「同层次基准」的弱势（落后最多2项）/ 优势（领先最多2项）标记
+    // st = 本班统计，base = 对比基准统计（同层次其他班）；返回 {itemKey: 'low'|'high'} 与差值
+    _rateMarks(st, base) {
+      if (!base) return { marks: {}, delta: {} };
+      const arr = App.ITEM_KEYS.map(k => ({
+        k,
+        d: (st[k].rate != null && base[k].rate != null) ? st[k].rate - base[k].rate : null
+      })).filter(x => x.d != null);
+      const delta = {};
+      arr.forEach(x => { delta[x.k] = x.d; });
+      if (arr.length < 5) return { marks: {}, delta };
+      const sorted = [...arr].sort((a, b) => a.d - b.d);
+      // 只标真正落后 / 领先同层次的题型（差距 > 0.05 个百分点），最多各 2 项
+      const weak = sorted.filter(x => x.d < -0.0005).slice(0, 2).map(x => x.k);
+      const strong = sorted.filter(x => x.d > 0.0005).reverse().slice(0, 2).map(x => x.k);
+      if (!weak.length && !strong.length) return { marks: {}, delta }; // 与同层次持平
+      const marks = {};
+      weak.forEach(k => { marks[k] = 'low'; });
+      strong.forEach(k => { marks[k] = 'high'; });
+      return { marks, delta };
+    },
+
+    // 计算某班的同层次对比基准（同层次其他班；无分层或仅本班时回退全年级其他班）
+    _classBaseStats(ex, classId, thr, cache) {
+      const c = cache || {};
+      const tier = App.tierOf(classId);
+      let others = [];
+      if (tier) others = App.tierMembers(tier).filter(id => ex.classIds.includes(String(id)) && String(id) !== String(classId));
+      let label = tier ? `${tier} 层其他班` : '全年级其他班';
+      if (!others.length) { others = ex.classIds.filter(id => String(id) !== String(classId)); label = '全年级其他班'; }
+      if (!others.length) return null;
+      const key = tier ? `t:${tier}:${classId}` : `a:${classId}`;
+      if (!c[key]) {
+        const recs = [];
+        others.forEach(o => recs.push(...((ex.scores || {})[o] || [])));
+        c[key] = this.computeClassStats(recs, ex.fullMarks, thr);
+      }
+      return c[key];
     },
 
     /* ================= 单班成绩分析（同层次对比） ================= */
@@ -985,21 +1011,27 @@ ${tierTable}
         td(App.fmtPct(st.lowRate), bold) + td(App.fmtPct(st.rate), bold), bold);
       const rowsA = allIds.map(cid => rowA(statsMap[cid].total, clsName(cid), false, statsMap[cid].absentN)).join('') + rowA(gradeStats.total, '全年级', true, gradeStats.absentN);
 
-      // —— 表格 B：各班各题型得分率（%，每班标红弱势 2 项 / 标绿优势 2 项）——
+      // —— 表格 B：各班各题型得分率（%，相对同层次：落后最多 2 项标红 / 领先最多 2 项标绿）——
       const headB = '<tr><th>班级</th>' + [...App.ITEMS.map(i => `<th class="num">${i.label}</th>`), '<th class="num">总分</th>'].join('') + '</tr>';
-      // 计算每行最低 2 / 最高 2 题型（弱势/优势）
-      const rateMarks = st => this._rateMarks(st);
-      const rowB = (st, label, bold, withMark) => {
-        const marks = withMark ? rateMarks(st) : {};
+      const baseCache = {};
+      const rowB = (st, label, bold, base) => {
+        const rm = base ? this._rateMarks(st, base) : { marks: {}, delta: {} };
+        const marks = rm.marks, delta = rm.delta;
         const cells = App.ITEM_KEYS.map(k => {
           const mk = marks[k];
           const extra = mk === 'low' ? ' rate-low' : mk === 'high' ? ' rate-high' : '';
-          const val = App.fmtPct(st[k].rate);
-          return `<td class="num${extra}">${bold ? '<b>' + val + '</b>' : val}</td>`;
+          const val = bold ? '<b>' + App.fmtPct(st[k].rate) + '</b>' : App.fmtPct(st[k].rate);
+          let tip = '';
+          if (delta[k] != null && base) {
+            const d = delta[k] * 100;
+            tip = ` title="本班 ${App.fmtPct(st[k].rate)}｜同层次 ${App.fmtPct(base[k].rate)}｜${d >= 0 ? '领先' : '落后'} ${Math.abs(d).toFixed(1)} 个百分点${mk === 'low' ? '（弱势题型）' : mk === 'high' ? '（优势题型）' : ''}"`;
+          }
+          return `<td class="num${extra}"${tip}>${val}</td>`;
         }).join('');
         return tr(nameCell(label, bold) + cells + td(App.fmtPct(st.total.rate), bold), bold);
       };
-      const rowsB = allIds.map(cid => rowB(statsMap[cid], clsName(cid), false, true)).join('') + rowB(gradeStats, '全年级', true, false);
+      const rowsB = allIds.map(cid => rowB(statsMap[cid], clsName(cid), false, this._classBaseStats(ex, cid, thr, baseCache))).join('')
+        + rowB(gradeStats, '全年级', true, null);
 
       // —— 表格 C：各班总分最高 / 最低 / 中位数 ——
       const headC = '<tr><th>班级</th><th class="num">最高分</th><th class="num">最低分</th><th class="num">中位数</th></tr>';
@@ -1056,7 +1088,7 @@ ${tierTable}
       </div>
 
       <div class="card">
-        <div class="card-title">🧩 各班各题型得分率对比（%）<span class="hint">— 每班最低 2 项<span style="color:#c0392b;font-weight:700"> 标红 </span>（弱势）、最高 2 项<span style="color:#1e7d54;font-weight:700"> 标绿 </span>（优势）</span></div>
+        <div class="card-title">🧩 各班各题型得分率对比（%）<span class="hint">— 相对<b>同层次班</b>：落后最多的 2 项<span style="color:#c0392b;font-weight:700"> 标红 </span>（弱势）、领先最多的 2 项<span style="color:#1e7d54;font-weight:700"> 标绿 </span>（优势）；鼠标悬停可看与同层次的差值</span></div>
         <div class="tbl-wrap"><table class="tbl"><thead>${headB}</thead><tbody>${rowsB}</tbody></table></div>
       </div>
 
@@ -1480,9 +1512,11 @@ ${tierTable}
 
       // 页2：各题型得分率 + 各分段人数
       this._pdfPage(P, ctx => {
-        this._pdfSection(ctx, P, '三、各班各题型得分率对比（%）（↓ 弱势题型 · ↑ 优势题型）', 48);
+        this._pdfSection(ctx, P, '三、各班各题型得分率对比（%）（相对同层次：↓ 弱势题型 · ↑ 优势题型）', 48);
+        const pdfBaseCache = {};
         const rows3 = allIds.map(cid => {
-          const marks = this._rateMarks(statsMap[cid]);
+          const base = this._classBaseStats(ex, cid, thr, pdfBaseCache);
+          const marks = (base ? this._rateMarks(statsMap[cid], base) : { marks: {} }).marks;
           return [clsName(cid), ...App.ITEM_KEYS.map(k => {
             const v = App.fmtPct(statsMap[cid][k].rate);
             return marks[k] === 'low' ? v + ' ↓' : marks[k] === 'high' ? v + ' ↑' : v;
@@ -1552,7 +1586,11 @@ ${tierTable}
         let y = this._pdfTable(ctx, P.PXM, 118, [160, 184, 184, 186], ['指标', clsLabel, cmpLabel, '差值'], rows1, { fontSize: 10.5 });
         y += 30;
         this._pdfSection(ctx, P, '二、各题型得分率对比（%）', y); y += 12;
-        const rows2 = [...App.ITEM_KEYS.map(k => [App.itemLabel(k), App.fmtPct(cs[k].rate), App.fmtPct(gs[k].rate), dv(cs[k].rate, gs[k].rate, true)]),
+        const cm = this._rateMarks(cs, gs).marks;
+        const rows2 = [...App.ITEM_KEYS.map(k => {
+          const nm = App.itemLabel(k) + (cm[k] === 'low' ? ' ↓' : cm[k] === 'high' ? ' ↑' : '');
+          return [nm, App.fmtPct(cs[k].rate), App.fmtPct(gs[k].rate), dv(cs[k].rate, gs[k].rate, true)];
+        }),
           ['总分', App.fmtPct(cs.total.rate), App.fmtPct(gs.total.rate), dv(cs.total.rate, gs.total.rate, true)]];
         this._pdfTable(ctx, P.PXM, y, [160, 184, 184, 186], ['题型', clsLabel, cmpLabel, '差值'], rows2, { fontSize: 10.5 });
       }, foot);
