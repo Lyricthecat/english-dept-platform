@@ -98,6 +98,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 .tbl tfoot td{background:#fbfefc;font-weight:700;color:var(--mint-800)}
 .tbl .num{text-align:right;font-variant-numeric:tabular-nums}
 .tbl th.num{text-align:right}
+/* 各题型得分率：弱势（红）/ 优势（绿）标记 */
+.tbl td.rate-low{background:#fdeaea;color:#c0392b;font-weight:700}
+.tbl td.rate-high{background:#e6f7ee;color:#1e7d54;font-weight:700}
 .tbl .row-good{background:#f2fbf6}
 .tbl .row-top{background:#e9f9ef;font-weight:700}
 

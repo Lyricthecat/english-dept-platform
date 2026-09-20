@@ -105,6 +105,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 .tbl tfoot td{background:#fbfefc;font-weight:700;color:var(--mint-800)}
 .tbl .num{text-align:right;font-variant-numeric:tabular-nums}
 .tbl th.num{text-align:right}
+/* 各题型得分率：弱势（红）/ 优势（绿）标记 */
+.tbl td.rate-low{background:#fdeaea;color:#c0392b;font-weight:700}
+.tbl td.rate-high{background:#e6f7ee;color:#1e7d54;font-weight:700}
 .tbl .row-good{background:#f2fbf6}
 .tbl .row-top{background:#e9f9ef;font-weight:700}
 
@@ -2717,7 +2720,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // 计算班内排名（并列同名次，如 1,1,3），只填补缺失/标记重算
     ensureRanks(ex, classId) {
       const recs = (ex.scores || {})[classId] || [];
-      const hasVal = recs.filter(r => r.total != null);
+      // 缺考 / 无总分的学生不参与排名
+      const hasVal = recs.filter(r => !App.isAbsent(r) && App.num(r.total) != null);
       const need = recs.some(r => r.rank == null);
       if (!hasVal.length) return;
       const sorted = [...hasVal].sort((a, b) => b.total - a.total);
@@ -2727,7 +2731,32 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         else { r.rank = i + 1; prevRank = i + 1; }
         prev = r.total;
       });
+      recs.forEach(r => { if (App.isAbsent(r) || App.num(r.total) == null) r.rank = null; });
       if (need) DB().save('更新排名');
+    },
+
+    // 一键重算所有参与班级的班内总分排名（覆盖已有排名，并列同名次，缺考不参与）
+    recomputeAllRanks(ex) {
+      let classN = 0, stuN = 0;
+      ex.classIds.forEach(cid => {
+        const recs = (ex.scores || {})[cid] || [];
+        const valid = recs.filter(r => !App.isAbsent(r) && App.num(r.total) != null);
+        if (!valid.length) return;
+        const sorted = [...valid].sort((a, b) => b.total - a.total);
+        let prev = null, prevRank = 0;
+        sorted.forEach((r, i) => {
+          if (prev != null && r.total === prev) r.rank = prevRank;
+          else { r.rank = i + 1; prevRank = i + 1; }
+          prev = r.total;
+        });
+        recs.forEach(r => { if (App.isAbsent(r) || App.num(r.total) == null) r.rank = null; });
+        classN++; stuN += sorted.length;
+      });
+      if (!classN) { App.toast('没有可计算排名的成绩数据', 'err'); return { classN: 0, stuN: 0 }; }
+      DB().save('重算班内排名');
+      App.toast(`已重算 ${classN} 个班、${stuN} 名学生的班内总分排名`, 'ok');
+      this.render();
+      return { classN, stuN };
     },
 
     /* ================= 整表导入（一个文件含多个班） ================= */
@@ -2986,6 +3015,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     metricName(m) {
       return { avg: '平均分', max: '最高分', min: '最低分', range: '班内分差', median: '中位数', passRate: '及格率', goodRate: '优秀率', lowRate: '低分率', rate: '得分率' }[m] || m;
+    },
+
+    // 每行题型得分率的弱势（最低2）/ 优势（最高2）标记：{itemKey: 'low'|'high'}
+    _rateMarks(st) {
+      const arr = App.ITEM_KEYS.map(k => ({ k, r: st[k].rate })).filter(x => x.r != null);
+      if (arr.length < 5) return {};
+      const sorted = [...arr].sort((a, b) => a.r - b.r);
+      const low = sorted.slice(0, 2).map(x => x.k);
+      const high = sorted.slice(-2).map(x => x.k);
+      if (low.some(k => high.includes(k))) return {};
+      const m = {};
+      low.forEach(k => { m[k] = 'low'; });
+      high.forEach(k => { m[k] = 'high'; });
+      return m;
     },
 
     /* ================= 单班成绩分析（同层次对比） ================= */
@@ -3294,11 +3337,21 @@ ${tierTable}
         td(App.fmtPct(st.lowRate), bold) + td(App.fmtPct(st.rate), bold), bold);
       const rowsA = allIds.map(cid => rowA(statsMap[cid].total, clsName(cid), false, statsMap[cid].absentN)).join('') + rowA(gradeStats.total, '全年级', true, gradeStats.absentN);
 
-      // —— 表格 B：各班各题型得分率（%）——
+      // —— 表格 B：各班各题型得分率（%，每班标红弱势 2 项 / 标绿优势 2 项）——
       const headB = '<tr><th>班级</th>' + [...App.ITEMS.map(i => `<th class="num">${i.label}</th>`), '<th class="num">总分</th>'].join('') + '</tr>';
-      const rowB = (st, label, bold) => tr(nameCell(label, bold) +
-        [...App.ITEM_KEYS.map(k => td(App.fmtPct(st[k].rate), bold)), td(App.fmtPct(st.total.rate), bold)].join(''), bold);
-      const rowsB = allIds.map(cid => rowB(statsMap[cid], clsName(cid), false)).join('') + rowB(gradeStats, '全年级', true);
+      // 计算每行最低 2 / 最高 2 题型（弱势/优势）
+      const rateMarks = st => this._rateMarks(st);
+      const rowB = (st, label, bold, withMark) => {
+        const marks = withMark ? rateMarks(st) : {};
+        const cells = App.ITEM_KEYS.map(k => {
+          const mk = marks[k];
+          const extra = mk === 'low' ? ' rate-low' : mk === 'high' ? ' rate-high' : '';
+          const val = App.fmtPct(st[k].rate);
+          return `<td class="num${extra}">${bold ? '<b>' + val + '</b>' : val}</td>`;
+        }).join('');
+        return tr(nameCell(label, bold) + cells + td(App.fmtPct(st.total.rate), bold), bold);
+      };
+      const rowsB = allIds.map(cid => rowB(statsMap[cid], clsName(cid), false, true)).join('') + rowB(gradeStats, '全年级', true, false);
 
       // —— 表格 C：各班总分最高 / 最低 / 中位数 ——
       const headC = '<tr><th>班级</th><th class="num">最高分</th><th class="num">最低分</th><th class="num">中位数</th></tr>';
@@ -3334,6 +3387,7 @@ ${tierTable}
         <div class="flex mb12">
           <div class="card-title" style="margin:0">📐 ${App.esc(ex.name)} · 成绩分析 <span class="hint">（${App.esc(ex.date)} · 满分 ${full} 分）</span></div>
           <div class="spacer"></div>
+          <button class="btn btn-ghost btn-sm" data-act="recalcRanks">🧮 一键计算班内排名</button>
           <button class="btn btn-ghost btn-sm" data-act="expAnalysis">📊 导出分析 Excel</button>
           <button class="btn btn-ghost btn-sm" data-act="expPdf">📄 导出 PDF 报告</button>
           <button class="btn btn-primary btn-sm" data-act="expAllPdf">📦 一键打包导出（全年级 + 各班 PDF）</button>
@@ -3354,7 +3408,7 @@ ${tierTable}
       </div>
 
       <div class="card">
-        <div class="card-title">🧩 各班各题型得分率对比（%）</div>
+        <div class="card-title">🧩 各班各题型得分率对比（%）<span class="hint">— 每班最低 2 项<span style="color:#c0392b;font-weight:700"> 标红 </span>（弱势）、最高 2 项<span style="color:#1e7d54;font-weight:700"> 标绿 </span>（优势）</span></div>
         <div class="tbl-wrap"><table class="tbl"><thead>${headB}</thead><tbody>${rowsB}</tbody></table></div>
       </div>
 
@@ -3421,6 +3475,7 @@ ${tierTable}
       App.delegate(v, {
         click: {
           backExam: () => { this.view = 'exam:' + ex.id; this.render(); },
+          recalcRanks: () => this.recomputeAllRanks(ex),
           expAnalysis: () => this.exportAnalysis(ex),
           expPdf: () => this.exportAnalysisPDF(ex),
           expAllPdf: () => this.exportAllPDFs(ex),
@@ -3777,8 +3832,14 @@ ${tierTable}
 
       // 页2：各题型得分率 + 各分段人数
       this._pdfPage(P, ctx => {
-        this._pdfSection(ctx, P, '三、各班各题型得分率对比（%）', 48);
-        const rows3 = allIds.map(cid => [clsName(cid), ...App.ITEM_KEYS.map(k => App.fmtPct(statsMap[cid][k].rate)), App.fmtPct(statsMap[cid].total.rate)]);
+        this._pdfSection(ctx, P, '三、各班各题型得分率对比（%）（↓ 弱势题型 · ↑ 优势题型）', 48);
+        const rows3 = allIds.map(cid => {
+          const marks = this._rateMarks(statsMap[cid]);
+          return [clsName(cid), ...App.ITEM_KEYS.map(k => {
+            const v = App.fmtPct(statsMap[cid][k].rate);
+            return marks[k] === 'low' ? v + ' ↓' : marks[k] === 'high' ? v + ' ↑' : v;
+          }), App.fmtPct(statsMap[cid].total.rate)];
+        });
         rows3.push(['全年级', ...App.ITEM_KEYS.map(k => App.fmtPct(gs[k].rate)), App.fmtPct(gs.total.rate)]);
         let y = this._pdfTable(ctx, P.PXM, 60, [58, ...Array(10).fill(65)], ['班级', ...App.ITEMS.map(i => i.label), '总分'], rows3, { fontSize: 10 });
         y += 30;
