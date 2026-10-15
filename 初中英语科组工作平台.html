@@ -110,6 +110,11 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 .tbl td.rate-high{background:#e6f7ee;color:#1e7d54;font-weight:700}
 .tbl .row-good{background:#f2fbf6}
 .tbl .row-top{background:#e9f9ef;font-weight:700}
+/* 成绩进退对比：进步（绿）/ 退步（红） */
+.r-up{color:#1e7d54;font-weight:700}
+.r-down{color:#c0392b;font-weight:700}
+.tbl td.cmp-up{background:#e6f7ee}
+.tbl td.cmp-down{background:#fdeaea}
 
 /* ---------- 表单 ---------- */
 .field{margin-bottom:14px}
@@ -1165,13 +1170,22 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   /* ---------------- 事件委托 ---------------- */
   // App.delegate(rootEl, {click:{act:fn}, change:{...}, input:{...}}) — fn(e, el)
   App.delegate = (root, maps) => {
-    const bind = (evt, map) => root.addEventListener(evt, e => {
-      const el = e.target.closest('[data-' + (evt === 'click' ? 'act' : evt === 'change' ? 'cact' : 'iact') + ']');
-      if (!el || !root.contains(el)) return;
-      const key = el.dataset[evt === 'click' ? 'act' : evt === 'change' ? 'cact' : 'iact'];
-      const fn = map[key];
-      if (fn) { e.preventDefault(); fn(e, el); }
-    });
+    // 视图每次 render 都会重新调用本函数；同一元素重复 addEventListener 会叠加，
+    // 导致「点一次导出触发 N 次」→ 先解绑上一次绑定的事件
+    if (root.__ejwpBind) root.__ejwpBind.forEach(x => root.removeEventListener(x.evt, x.fn));
+    const bound = [];
+    root.__ejwpBind = bound;
+    const bind = (evt, map) => {
+      const handler = e => {
+        const el = e.target.closest('[data-' + (evt === 'click' ? 'act' : evt === 'change' ? 'cact' : 'iact') + ']');
+        if (!el || !root.contains(el)) return;
+        const key = el.dataset[evt === 'click' ? 'act' : evt === 'change' ? 'cact' : 'iact'];
+        const fn = map[key];
+        if (fn) { e.preventDefault(); fn(e, el); }
+      };
+      bound.push({ evt: evt, fn: handler });
+      root.addEventListener(evt, handler);
+    };
     if (maps.click) bind('click', maps.click);
     if (maps.change) bind('change', maps.change);
     if (maps.input) bind('input', maps.input);
@@ -2372,6 +2386,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     anClasses: null,        // null=全部
     anThr: null,            // {pass, good, low} 会话级覆盖
     charts: {},
+    // 成绩进退对比（会话级）
+    cmpA: null,             // 本次考试 id
+    cmpB: null,             // 对比考试 id
+    cmpClass: 'all',        // 明细筛选的班级
 
     init() {
       App.$('#examBtnNew').onclick = () => this.openExamForm(null);
@@ -2385,6 +2403,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       App.closeAllCharts();
       this.charts = {};
       const v = App.$('#gradesView');
+      if (this.view === 'compare') { this.renderCompare(v); return; }
       if (this.view.startsWith('classanalysis:')) { this.renderClassAnalysis(v); return; }
       if (this.view.startsWith('exam:')) { this.renderExam(v); return; }
       if (this.view.startsWith('analysis:')) { this.renderAnalysis(v); return; }
@@ -2394,7 +2413,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     /* ================= 列表 ================= */
     renderList(v) {
       const exams = [...DB().state.exams].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-      v.innerHTML = exams.length ? `<div class="exam-grid">
+      const cmpBar = `<div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="card-title" style="margin:0">📈 成绩进退对比 <span class="hint">（最新成绩 vs 上一次成绩：总分、班内排名、年级排名的进退；可导出「每班一个工作表」的 Excel）</span></div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary btn-sm" data-act="openCompare">打开对比表</button>
+      </div>`;
+      v.innerHTML = cmpBar + (exams.length ? `<div class="exam-grid">
         ${exams.map(ex => {
           let imported = 0, expected = 0;
           ex.classIds.forEach(cid => {
@@ -2413,9 +2437,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             <div class="ec-bar"><span>${pct}%</span><span>满分 ${App.fullTotal(ex.fullMarks)} 分</span></div>
           </div>`;
         }).join('')}
-      </div>` : `<div class="empty"><div class="e-ico">📊</div><p>还没有考试记录，点击右上角「新建考试」开始<br>新建后可一键全选 1-15 班，并分班导入统一模板的成绩</p></div>`;
+      </div>` : `<div class="empty"><div class="e-ico">📊</div><p>还没有考试记录，点击右上角「新建考试」开始<br>新建后可一键全选 1-15 班，并分班导入统一模板的成绩</p></div>`);
 
-      App.delegate(v, { click: { openExam: (e, el) => { this.view = 'exam:' + el.dataset.id; this.examId = el.dataset.id; this.render(); } } });
+      App.delegate(v, { click: {
+        openExam: (e, el) => { this.view = 'exam:' + el.dataset.id; this.examId = el.dataset.id; this.render(); },
+        openCompare: () => { this.view = 'compare'; this.render(); }
+      } });
     },
 
     /* ================= 新建 / 编辑考试 ================= */
@@ -2553,6 +2580,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           <button class="btn btn-danger btn-sm" data-act="delExam">🗑 删除考试</button>
           <button class="btn btn-ghost btn-sm" data-act="dlTpl">⬇ 导入模板</button>
           <button class="btn btn-ghost btn-sm" data-act="impAll">📥 整表导入</button>
+          <button class="btn btn-ghost btn-sm" data-act="openCompare">📈 进退对比</button>
           <button class="btn btn-primary" data-act="analyze">🔍 一键分析</button>
         </div>
       </div>
@@ -2567,6 +2595,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           editExam: () => this.openExamForm(ex),
           delExam: () => this.deleteExam(ex),
           analyze: () => { this.view = 'analysis:' + ex.id; this.render(); },
+          openCompare: () => { this.view = 'compare'; this.render(); },
           dlTpl: () => this.downloadTemplate(ex),
           impAll: () => this.importAll(ex),
           impCls: (e, el) => this.importForClass(ex, el.dataset.id),
@@ -2937,6 +2966,320 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         message: `确定清空 ${App.esc(DB().getClass(classId) ? DB().getClass(classId).name : classId + '班')} 的 ${n} 条成绩吗？此操作不可撤销。`,
         onOk: () => { delete ex.scores[classId]; DB().save('清空成绩'); App.toast('已清空', 'ok'); this.renderExam(App.$('#gradesView')); }
       });
+    },
+
+    /* ================= 成绩进退对比（本次 vs 上一次） ================= */
+
+    // 按总分降序的比赛名次（并列同名次 1,1,3）；缺考 / 无总分不参与排名。返回 Map(成绩记录 → 名次)
+    rankByTotal(recs) {
+      const valid = (recs || []).filter(r => !App.isAbsent(r) && App.num(r.total) != null);
+      const sorted = [...valid].sort((a, b) => App.num(b.total) - App.num(a.total));
+      const m = new Map();
+      let prev = null, prevRank = 0;
+      sorted.forEach((r, i) => {
+        const t = App.num(r.total);
+        if (prev != null && t === prev) m.set(r, prevRank);
+        else { m.set(r, i + 1); prevRank = i + 1; }
+        prev = t;
+      });
+      return m;
+    },
+
+    // 一次考试中全部参与班级合并的年级排名 Map(成绩记录 → 名次)
+    gradeRanks(ex) {
+      const all = [];
+      (ex.classIds || []).forEach(cid => all.push(...((ex.scores || {})[cid] || [])));
+      return this.rankByTotal(all);
+    },
+
+    // 学生识别键（跨考试匹配：优先学号，其次姓名）
+    stuKeys(r) {
+      const ks = [];
+      if (r.studentId) ks.push('S:' + r.studentId);
+      if (r.no) ks.push('N:' + r.no);
+      if (r.name) ks.push('M:' + r.name);
+      return ks;
+    },
+    recIndexOf(recs) {
+      const map = new Map();
+      (recs || []).forEach(r => this.stuKeys(r).forEach(k => { if (!map.has(k)) map.set(k, r); }));
+      return map;
+    },
+    recLookup(idx, r) {
+      for (const k of this.stuKeys(r)) { const hit = idx.get(k); if (hit) return hit; }
+      return null;
+    },
+
+    // 单行对比数据（r = 本次成绩记录，prev = 上次成绩记录，均可为 null）
+    cmpRow(r, prev, rank, prevRank, gRank, prevGRank) {
+      const total = r ? App.num(r.total) : null;
+      const prevTotal = prev ? App.num(prev.total) : null;
+      const items = {};
+      App.ITEM_KEYS.forEach(k => { items[k] = (r && r[k] != null && r[k] !== '') ? App.num(r[k]) : null; });
+      let note = '';
+      if (!r) note = '本次未录入';
+      else if (total == null) note = '本次缺考';
+      else if (!prev) note = '无上次成绩';
+      else if (prevTotal == null) note = '上次缺考';
+      return {
+        no: (r && r.no) || (prev && prev.no) || '',
+        name: (r && r.name) || (prev && prev.name) || '',
+        items: items,
+        total: total, prevTotal: prevTotal,
+        dTotal: (total != null && prevTotal != null) ? +(total - prevTotal).toFixed(2) : null,
+        rank: rank != null ? rank : null, prevRank: prevRank != null ? prevRank : null,
+        dRank: (rank != null && prevRank != null) ? prevRank - rank : null,
+        gradeRank: gRank != null ? gRank : null, prevGradeRank: prevGRank != null ? prevGRank : null,
+        dGradeRank: (gRank != null && prevGRank != null) ? prevGRank - gRank : null,
+        note: note
+      };
+    },
+
+    // 一组行的汇总（本次均分 / 上次均分（同批学生）/ 进退人数）
+    cmpStat(rows) {
+      const cur = rows.filter(r => r.total != null);
+      const both = rows.filter(r => r.total != null && r.prevTotal != null);
+      const stA = App.statsOf(cur.map(r => r.total));
+      const stB = App.statsOf(both.map(r => r.prevTotal));
+      return {
+        n: rows.length, count: cur.length, absent: rows.length - cur.length,
+        avgA: stA.avg, avgB: stB.avg, maxA: stA.max,
+        dAvg: (stA.avg != null && stB.avg != null) ? stA.avg - stB.avg : null,
+        up: rows.filter(r => r.dRank != null && r.dRank > 0).length,
+        down: rows.filter(r => r.dRank != null && r.dRank < 0).length,
+        stay: rows.filter(r => r.dRank === 0).length,
+        noBase: cur.filter(r => r.prevTotal == null).length
+      };
+    },
+
+    // 对比数据（纯函数，不修改任何数据）
+    compareData(exA, exB) {
+      const clsName = cid => (DB().getClass(cid) || { name: cid + '班' }).name;
+      const aGrade = this.gradeRanks(exA);
+      const bGrade = this.gradeRanks(exB);
+      const classes = (exA.classIds || []).map(cid => {
+        const aRecs = (exA.scores || {})[cid] || [];
+        const bRecs = (exB.scores || {})[cid] || [];
+        const aIdx = this.recIndexOf(aRecs), bIdx = this.recIndexOf(bRecs);
+        const aR = this.rankByTotal(aRecs), bR = this.rankByTotal(bRecs);
+        const rows = aRecs.map(r => {
+          const prev = this.recLookup(bIdx, r);
+          return this.cmpRow(r, prev,
+            aR.has(r) ? aR.get(r) : null,
+            prev && bR.has(prev) ? bR.get(prev) : null,
+            aGrade.has(r) ? aGrade.get(r) : null,
+            prev && bGrade.has(prev) ? bGrade.get(prev) : null);
+        });
+        // 上次有成绩、本次没有的学生也列出（便于发现漏录 / 缺考）
+        bRecs.forEach(pr => {
+          if (this.recLookup(aIdx, pr)) return;
+          rows.push(this.cmpRow(null, pr, null, bR.has(pr) ? bR.get(pr) : null, null, bGrade.has(pr) ? bGrade.get(pr) : null));
+        });
+        rows.sort((x, y) => (x.gradeRank ?? 1e9) - (y.gradeRank ?? 1e9) ||
+          (x.prevGradeRank ?? 1e9) - (y.prevGradeRank ?? 1e9) ||
+          String(x.no || '').localeCompare(String(y.no || '')));
+        return { cid: cid, name: clsName(cid), rows: rows, stat: this.cmpStat(rows) };
+      });
+      const allRows = [];
+      classes.forEach(c => allRows.push(...c.rows));
+      return { classes: classes, rows: allRows, stat: this.cmpStat(allRows) };
+    },
+
+    // 进退 / 增减的显示片段（正数 = 名次前进）
+    cmpDelta(d, dec) {
+      if (d == null) return '<span class="muted">—</span>';
+      if (d === 0) return '<span class="muted">持平</span>';
+      const txt = (d > 0 ? '+' : '') + App.fmt(d, dec ? 1 : 0);
+      return `<span class="${d > 0 ? 'r-up' : 'r-down'}">${txt}</span>`;
+    },
+    cmpRankDelta(d) {
+      if (d == null) return '<span class="muted">—</span>';
+      if (d === 0) return '<span class="muted">持平</span>';
+      return `<span class="${d > 0 ? 'r-up' : 'r-down'}">${d > 0 ? '↑' + d : '↓' + (-d)}</span>`;
+    },
+
+    renderCompare(v) {
+      const exams = [...DB().state.exams].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      if (!exams.length) {
+        v.innerHTML = `<div class="crumb"><button data-act="cmpBack">← 返回考试列表</button></div>
+          <div class="empty"><div class="e-ico">📈</div><p>还没有考试记录<br>先新建考试并导入成绩，才能做「最新成绩 vs 上一次成绩」的进退对比</p></div>`;
+        App.delegate(v, { click: { cmpBack: () => { this.view = 'list'; this.render(); } } });
+        return;
+      }
+      if (!this.cmpA || !exams.some(e => e.id === this.cmpA)) this.cmpA = exams[0].id;
+      if (!this.cmpB || !exams.some(e => e.id === this.cmpB)) this.cmpB = (exams[1] || exams[0]).id;
+      const exA = exams.find(e => e.id === this.cmpA);
+      const exB = exams.find(e => e.id === this.cmpB);
+      const opt = sel => exams.map(e => `<option value="${e.id}"${e.id === sel ? ' selected' : ''}>${App.esc(e.name)}（${App.esc(e.date)}）</option>`).join('');
+      const fullA = App.fullTotal(exA.fullMarks), fullB = App.fullTotal(exB.fullMarks);
+
+      let body;
+      if (exA.id === exB.id) {
+        body = `<div class="card"><div class="card-title">📈 成绩进退对比</div>
+          <div class="empty" style="padding:26px"><div class="e-ico">⚠️</div><p>「本次考试」与「对比考试」不能是同一场，请在上方重新选择</p></div></div>`;
+      } else {
+        const data = this.compareData(exA, exB);
+        body = this._cmpSummaryHtml(data) + this._cmpDetailHtml(data);
+      }
+
+      v.innerHTML = `
+      <div class="crumb"><button data-act="cmpBack">← 返回考试列表</button><span>/</span><b>成绩进退对比</b></div>
+      <div class="card">
+        <div class="flex mb12" style="flex-wrap:wrap;gap:10px;align-items:flex-end">
+          <div class="field" style="margin:0"><label>本次考试（最新成绩）</label>
+            <select id="cmpSelA" style="min-width:230px">${opt(this.cmpA)}</select></div>
+          <button class="btn btn-ghost btn-sm" data-act="cmpSwap" title="交换两次考试">⇄</button>
+          <div class="field" style="margin:0"><label>对比考试（上一次成绩）</label>
+            <select id="cmpSelB" style="min-width:230px">${opt(this.cmpB)}</select></div>
+          <div class="spacer"></div>
+          <button class="btn btn-primary btn-sm" data-act="expCompare">📊 导出对比 Excel（每班一个工作表）</button>
+        </div>
+        <div class="card-sub" style="margin:0">
+          本次：<b>${App.esc(exA.name)}</b>（${App.esc(exA.date)} · 满分 ${fullA} 分 · ${exA.classIds.length} 个班）　　对比：<b>${App.esc(exB.name)}</b>（${App.esc(exB.date)} · 满分 ${fullB} 分 · ${exB.classIds.length} 个班）
+          ${fullA !== fullB ? `<br><b style="color:#c0392b">⚠️ 两次考试满分不同（${fullA} / ${fullB}），总分与名次对比仅供参考</b>` : ''}
+          <br>💡 <b>年级排名</b>＝该次考试全部参与班级合并排名（并列同名次）；<b>进退</b>＝上次名次 − 本次名次，<span class="r-up">正数＝名次前进</span>、<span class="r-down">负数＝名次退步</span>。
+          「上次均分」按<b>两次都有成绩的同一批学生</b>计算，口径可比。
+        </div>
+      </div>
+      ${body}`;
+
+      App.$('#cmpSelA').onchange = e => { this.cmpA = e.target.value; this.render(); };
+      App.$('#cmpSelB').onchange = e => { this.cmpB = e.target.value; this.render(); };
+      App.delegate(v, {
+        click: {
+          cmpBack: () => { this.view = 'list'; this.render(); },
+          cmpSwap: () => { const t = this.cmpA; this.cmpA = this.cmpB; this.cmpB = t; this.render(); },
+          cmpCls: (e, el) => { this.cmpClass = el.dataset.id; this.render(); },
+          expCompare: () => this.exportCompare()
+        }
+      });
+    },
+
+    _cmpSummaryHtml(data) {
+      const f1 = x => (x == null ? '—' : App.fmt(x));
+      const fTxt = x => (x == null ? '—' : (x > 0 ? '+' : '') + App.fmt(x));
+      const cls = x => (x == null || x === 0) ? '' : (x > 0 ? ' cmp-up' : ' cmp-down');
+      const row = (label, st, bold) => {
+        const b = x => bold ? `<b>${x}</b>` : x;
+        return `<tr${bold ? ' class="row-good"' : ''}>
+          <td>${bold ? '🏆 ' : ''}<b>${App.esc(label)}</b></td>
+          <td class="num">${b(st.count)}</td>
+          <td class="num">${b(st.absent || '—')}</td>
+          <td class="num">${b(f1(st.avgA))}</td>
+          <td class="num">${b(f1(st.avgB))}</td>
+          <td class="num${cls(st.dAvg)}">${b(fTxt(st.dAvg))}</td>
+          <td class="num">${b(f1(st.maxA))}</td>
+          <td class="num">${b(st.up)}</td>
+          <td class="num">${b(st.down)}</td>
+          <td class="num">${b(st.stay)}</td>
+          <td class="num">${b(st.noBase || '—')}</td>
+        </tr>`;
+      };
+      const head = '<tr><th>班级</th><th class="num">参考人数</th><th class="num">本次无成绩</th><th class="num">本次均分</th><th class="num">上次均分<br><span class="small" style="font-weight:400">（同批学生）</span></th><th class="num">均分增减</th><th class="num">本次最高分</th><th class="num">进步人数</th><th class="num">退步人数</th><th class="num">名次持平</th><th class="num">无上次成绩</th></tr>';
+      return `<div class="card">
+        <div class="card-title">📊 各班进退总览 <span class="hint">（含 🏆 全年级汇总行；进退人数按<b>班内排名</b>统计）</span></div>
+        <div class="tbl-wrap"><table class="tbl"><thead>${head}</thead><tbody>
+          ${data.classes.map(c => row(c.name, c.stat, false)).join('')}
+          ${row('全年级', data.stat, true)}
+        </tbody></table></div>
+      </div>`;
+    },
+
+    _cmpDetailHtml(data) {
+      const cur = this.cmpClass || 'all';
+      const chips = `<button class="chip ${cur === 'all' ? 'on' : ''}" data-act="cmpCls" data-id="all">全部班级</button>` +
+        data.classes.map(c => `<button class="chip ${cur === c.cid ? 'on' : ''}" data-act="cmpCls" data-id="${c.cid}">${App.esc(c.name)}</button>`).join('');
+      const showCls = cur === 'all';
+      const out = [];
+      data.classes.forEach(c => {
+        if (!showCls && c.cid !== cur) return;
+        c.rows.forEach((r, i) => out.push({ r: r, cls: c.name, idx: i + 1 }));
+      });
+      const body = out.map(o => {
+        const r = o.r;
+        const items = App.ITEM_KEYS.map(k => `<td class="num">${r.items[k] != null ? App.fmt(r.items[k]) : '<span class="muted">—</span>'}</td>`).join('');
+        return `<tr>
+          <td class="num">${o.idx}</td>
+          <td>${App.esc(r.no || '—')}</td>
+          <td><b>${App.esc(r.name)}</b></td>
+          ${showCls ? `<td>${App.esc(o.cls)}</td>` : ''}
+          ${items}
+          <td class="num"><b>${r.total != null ? App.fmt(r.total) : '<span class="muted">—</span>'}</b></td>
+          <td class="num">${r.prevTotal != null ? App.fmt(r.prevTotal) : '<span class="muted">—</span>'}</td>
+          <td class="num${r.dTotal == null || r.dTotal === 0 ? '' : r.dTotal > 0 ? ' cmp-up' : ' cmp-down'}">${this.cmpDelta(r.dTotal, true)}</td>
+          <td class="num">${r.rank != null ? r.rank : '<span class="muted">—</span>'}</td>
+          <td class="num${r.dRank == null || r.dRank === 0 ? '' : r.dRank > 0 ? ' cmp-up' : ' cmp-down'}">${this.cmpRankDelta(r.dRank)}</td>
+          <td class="num">${r.gradeRank != null ? r.gradeRank : '<span class="muted">—</span>'}</td>
+          <td class="num${r.dGradeRank == null || r.dGradeRank === 0 ? '' : r.dGradeRank > 0 ? ' cmp-up' : ' cmp-down'}">${this.cmpRankDelta(r.dGradeRank)}</td>
+          <td>${r.note ? `<span class="small muted">${App.esc(r.note)}</span>` : ''}</td>
+        </tr>`;
+      }).join('');
+      const head = `<tr><th class="num">序号</th><th>学号</th><th>姓名</th>${showCls ? '<th>班级</th>' : ''}
+        ${App.ITEMS.map(i => `<th class="num">${i.label}</th>`).join('')}
+        <th class="num">本次总分</th><th class="num">上次总分</th><th class="num">总分增减</th>
+        <th class="num">班内排名</th><th class="num">班内进退</th><th class="num">年级排名</th><th class="num">年级进退</th><th>备注</th></tr>`;
+      return `<div class="card">
+        <div class="card-title">📋 学生成绩进退明细 <span class="hint">（题型分数为<b>本次考试</b>的得分）</span></div>
+        <div class="field"><label>班级筛选</label><div class="chips">${chips}</div></div>
+        <div class="tbl-wrap" style="max-height:70vh"><table class="tbl"><thead>${head}</thead><tbody>${body}</tbody></table></div>
+      </div>`;
+    },
+
+    // 导出对比 Excel：年级汇总 + 全年级明细 + 每班一个工作表
+    exportCompare() {
+      const exams = [...DB().state.exams].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      const exA = exams.find(e => e.id === this.cmpA);
+      const exB = exams.find(e => e.id === this.cmpB);
+      if (!exA || !exB) { App.toast('请先选择两次考试', 'err'); return; }
+      if (exA.id === exB.id) { App.toast('「本次考试」与「对比考试」不能是同一场', 'err'); return; }
+      const data = this.compareData(exA, exB);
+      if (!data.rows.length) { App.toast('这两次考试都还没有成绩数据', 'err'); return; }
+
+      const HDR = ['序号', '学号', '姓名', ...App.ITEMS.map(i => i.label),
+        '本次总分', '上次总分', '总分增减', '班内排名', '上次班内排名', '班内排名进退',
+        '年级排名', '上次年级排名', '年级排名进退', '备注'];
+      const W = [6, 12, 12, ...App.ITEMS.map(() => 8), 10, 10, 10, 9, 11, 13, 9, 11, 13, 14];
+      const nz = x => (x == null || x === '') ? '' : x;
+      const dec = x => (x == null) ? '' : +Number(x).toFixed(1);
+      const rowOf = (r, i) => [i, r.no || '', r.name || '',
+        ...App.ITEM_KEYS.map(k => nz(r.items[k])),
+        nz(r.total), nz(r.prevTotal), nz(r.dTotal),
+        nz(r.rank), nz(r.prevRank), nz(r.dRank),
+        nz(r.gradeRank), nz(r.prevGradeRank), nz(r.dGradeRank), r.note || ''];
+
+      const s1 = [['班级', '参考人数', '本次无成绩', '本次均分', '上次均分（同批学生）', '均分增减', '本次最高分', '进步人数', '退步人数', '名次持平', '无上次成绩'],
+        ...data.classes.map(c => [c.name, c.stat.count, c.stat.absent, dec(c.stat.avgA), dec(c.stat.avgB),
+          c.stat.dAvg == null ? '' : +c.stat.dAvg.toFixed(1), dec(c.stat.maxA), c.stat.up, c.stat.down, c.stat.stay, c.stat.noBase]),
+        ['🏆 全年级', data.stat.count, data.stat.absent, dec(data.stat.avgA), dec(data.stat.avgB),
+          data.stat.dAvg == null ? '' : +data.stat.dAvg.toFixed(1), dec(data.stat.maxA), data.stat.up, data.stat.down, data.stat.stay, data.stat.noBase]];
+      const sheets = [{ name: '年级汇总', aoa: s1, widths: [10, 10, 8, 10, 18, 10, 11, 10, 10, 10, 12] }];
+
+      const allRows = [...data.rows].sort((x, y) => (x.gradeRank ?? 1e9) - (y.gradeRank ?? 1e9) ||
+        (x.prevGradeRank ?? 1e9) - (y.prevGradeRank ?? 1e9) || String(x.no || '').localeCompare(String(y.no || '')));
+      sheets.push({ name: '全年级明细', aoa: [HDR, ...allRows.map(rowOf)], widths: W });
+      data.classes.forEach(c => {
+        sheets.push({ name: c.name, aoa: [HDR, ...c.rows.map(rowOf)], widths: W });
+      });
+
+      const wb = App.makeWorkbook(sheets);
+      // 为「总分增减 / 班内排名进退 / 年级排名进退」加正负号格式（数值仍是数字，可排序）
+      const fmtMap = { 14: '+0.0;-0.0;"—"', 17: '+0;-0;"—"', 20: '+0;-0;"—"' };
+      const applyFmt = name => {
+        const ws = wb.Sheets[name];
+        if (!ws || !ws['!ref']) return;
+        const rng = XLSX.utils.decode_range(ws['!ref']);
+        for (let R = 1; R <= rng.e.r; R++) {
+          Object.keys(fmtMap).forEach(c => {
+            const cell = ws[XLSX.utils.encode_cell({ r: R, c: +c })];
+            if (cell && cell.t === 'n') cell.z = fmtMap[c];
+          });
+        }
+      };
+      applyFmt('全年级明细');
+      data.classes.forEach(c => applyFmt(c.name));
+
+      XLSX.writeFile(wb, `${exA.name}与${exB.name}成绩进退对比.xlsx`);
+      App.toast(`已导出：年级汇总 + 全年级明细 + ${data.classes.length} 个班，共 ${data.classes.length + 2} 个工作表`, 'ok');
     },
 
     /* ================= 统计分析 ================= */
