@@ -103,6 +103,11 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
 .tbl td.rate-high{background:#e6f7ee;color:#1e7d54;font-weight:700}
 .tbl .row-good{background:#f2fbf6}
 .tbl .row-top{background:#e9f9ef;font-weight:700}
+/* 成绩进退对比：进步（绿）/ 退步（红） */
+.r-up{color:#1e7d54;font-weight:700}
+.r-down{color:#c0392b;font-weight:700}
+.tbl td.cmp-up{background:#e6f7ee}
+.tbl td.cmp-down{background:#fdeaea}
 
 /* ---------- 表单 ---------- */
 .field{margin-bottom:14px}
