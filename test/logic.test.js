@@ -1,7 +1,7 @@
 /* 纯逻辑测试：在 Node 中加载各模块（stub DOM/localStorage），验证核心算法 */
 'use strict';
 const path = require('path');
-const ROOT = '/opt/data/english-workbench/eng-platform';
+const ROOT = '/opt/data/english-dept-platform';
 
 // ---- 最小 DOM / localStorage stub ----
 const noopEl = {
@@ -93,10 +93,10 @@ eq('语法选择得分率', cs.grammar.rate, (8 + 7 + 5) / 3 / 10);
 
 console.log('== 排名 ensureRanks（并列同名次） ==');
 const tr = [
-  { studentId: 'a', no: '1', name: 'A', total: 85, rank: null },
-  { studentId: 'b', no: '2', name: 'B', total: 85, rank: null },
-  { studentId: 'c', no: '3', name: 'C', total: 80, rank: null },
-  { studentId: 'd', no: '4', name: 'D', total: 70, rank: null },
+  { studentId: 'a', no: '1', name: 'A', total: 85, rank: null, grammar: 10 },
+  { studentId: 'b', no: '2', name: 'B', total: 85, rank: null, grammar: 10 },
+  { studentId: 'c', no: '3', name: 'C', total: 80, rank: null, grammar: 10 },
+  { studentId: 'd', no: '4', name: 'D', total: 70, rank: null, grammar: 10 },
   { studentId: 'e', no: '5', name: 'E', total: null, rank: null }
 ];
 App.Grades.ensureRanks({ scores: { '1': tr } }, '1');
@@ -188,6 +188,45 @@ const json2 = JSON.stringify({ version: 1, settings: {}, plans: [], classes: [],
 App.DB.importJSON(json2, 'merge');
 eq('合并后考试数', App.DB.state.exams.length, 2);
 eq('合并不覆盖原考试', App.DB.state.exams[0].id, 'ex1');
+
+console.log('== 成绩进退对比 compareData / rankByTotal ==');
+// 旧考：1班 甲100 乙90 丙80 丁70 辛60；2班 戊95 己85
+// 新考：1班 甲95 乙95 丙70 丁缺考；2班 戊90 己88 庚80
+const mkR = (no, name, total) => ({ studentId: no, no: no, name: name, total: total, rank: null, grammar: 10 });
+const fmC = { ...App.DEFAULT_FULL };
+const exOld = { id: 'cOld', name: '旧考', date: '2026-09-01', fullMarks: fmC, classIds: ['1', '2'], scores: {
+  '1': [mkR('1', '甲', 100), mkR('2', '乙', 90), mkR('3', '丙', 80), mkR('4', '丁', 70), mkR('5', '辛', 60)],
+  '2': [mkR('6', '戊', 95), mkR('7', '己', 85)] } };
+const exNew = { id: 'cNew', name: '新考', date: '2026-10-01', fullMarks: fmC, classIds: ['1', '2'], scores: {
+  '1': [mkR('1', '甲', 95), mkR('2', '乙', 95), mkR('3', '丙', 70), { studentId: '4', no: '4', name: '丁', total: null, rank: null, absent: true }],
+  '2': [mkR('6', '戊', 90), mkR('7', '己', 88), mkR('8', '庚', 80)] } };
+const cd = App.Grades.compareData(exNew, exOld);
+const c1 = cd.classes.find(c => c.cid === '1');
+const c2 = cd.classes.find(c => c.cid === '2');
+const row = (cls, n) => cls.rows.find(r => r.name === n);
+// 并列同名次：甲、乙 本次总分同为 95 → 班内并列第 1，年级同样并列第 1
+eq('互补: 本次班内并列第1', [row(c1, '甲').rank, row(c1, '乙').rank], [1, 1]);
+eq('互补: 本次年级并列第1', [row(c1, '甲').gradeRank, row(c1, '乙').gradeRank], [1, 1]);
+eq('互补: 名次前进(乙 班内 2→1)', row(c1, '乙').dRank, 1);
+eq('互补: 名次前进(乙 年级 3→1)', row(c1, '乙').dGradeRank, 2);
+eq('互补: 名次持平(甲)', row(c1, '甲').dRank, 0);
+eq('互补: 名次退步(丙 年级 5→6)', row(c1, '丙').dGradeRank, -1);
+eq('互补: 总分增减', [row(c1, '甲').dTotal, row(c1, '乙').dTotal], [-5, 5]);
+eq('互补: 本次缺考', [row(c1, '丁').total, row(c1, '丁').rank, row(c1, '丁').note], [null, null, '本次缺考']);
+eq('互补: 本次未录入（上次有）', [row(c1, '辛').total, row(c1, '辛').prevRank, row(c1, '辛').note], [null, 5, '本次未录入']);
+eq('互补: 无上次成绩（新生）', [row(c2, '庚').dRank, row(c2, '庚').note], [null, '无上次成绩']);
+eq('互补: 跨考试按学号匹配', row(c2, '戊').prevTotal, 95);
+eq('互补: 班内进退人数', [c1.stat.up, c1.stat.down, c1.stat.stay], [1, 0, 2]);
+eq('互补: 全年级进退人数', [cd.stat.up, cd.stat.down, cd.stat.stay, cd.stat.noBase], [1, 0, 4, 1]);
+eq('互补: 全年级参考人数', cd.stat.count, 6);
+// 「上次均分」按两次都有成绩的同一批学生算：新考全部 6 人中的 5 人有上次成绩
+eq('互补: 全年级本次均分', Math.round(cd.stat.avgA * 100) / 100, Math.round((95 + 95 + 70 + 90 + 88 + 80) / 6 * 100) / 100);
+eq('互补: 全年级上次均分（同批）', Math.round(cd.stat.avgB * 100) / 100, Math.round((100 + 90 + 80 + 95 + 85) / 5 * 100) / 100);
+// rankByTotal：缺考（无总分）不参与排名
+const rkRecs = [{ total: 90, grammar: 1 }, { total: 90, grammar: 1 }, { total: 70, grammar: 1 }, { total: null, absent: true }];
+const rkMap = App.Grades.rankByTotal(rkRecs);
+eq('互补: rankByTotal 并列同名次', [rkMap.get(rkRecs[0]), rkMap.get(rkRecs[1]), rkMap.get(rkRecs[2])], [1, 1, 3]);
+eq('互补: rankByTotal 缺考不排名', rkMap.has(rkRecs[3]), false);
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 process.exit(fail ? 1 : 0);
