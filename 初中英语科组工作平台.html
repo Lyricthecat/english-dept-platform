@@ -3082,15 +3082,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       });
       const allRows = [];
       classes.forEach(c => allRows.push(...c.rows));
-      return { classes: classes, rows: allRows, stat: this.cmpStat(allRows) };
+      // 本次 / 对比考试里「整班没有成绩」的班级（提示用，避免被误读成"功能没数据"）
+      const missingA = classes.filter(c => !c.rows.some(r => r.total != null)).map(c => c.name);
+      const missingB = classes.filter(c => !c.rows.some(r => r.prevTotal != null)).map(c => c.name);
+      return { classes: classes, rows: allRows, stat: this.cmpStat(allRows), missingA: missingA, missingB: missingB };
     },
 
     // 进退 / 增减的显示片段（正数 = 名次前进）
     cmpDelta(d, dec) {
       if (d == null) return '<span class="muted">—</span>';
-      if (d === 0) return '<span class="muted">持平</span>';
-      const txt = (d > 0 ? '+' : '') + App.fmt(d, dec ? 1 : 0);
-      return `<span class="${d > 0 ? 'r-up' : 'r-down'}">${txt}</span>`;
+      // 统一消除 -0.0（toLocaleString 会把 -0 印成 "-0"）
+      const v = dec ? (Math.round(d * 10) / 10 || 0) : (Math.round(d) || 0);
+      if (v === 0) return '<span class="muted">0</span>';
+      return `<span class="${v > 0 ? 'r-up' : 'r-down'}">${(v > 0 ? '+' : '') + App.fmt(v, dec ? 1 : 0)}</span>`;
     },
     cmpRankDelta(d) {
       if (d == null) return '<span class="muted">—</span>';
@@ -3113,13 +3117,21 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const opt = sel => exams.map(e => `<option value="${e.id}"${e.id === sel ? ' selected' : ''}>${App.esc(e.name)}（${App.esc(e.date)}）</option>`).join('');
       const fullA = App.fullTotal(exA.fullMarks), fullB = App.fullTotal(exB.fullMarks);
 
+      const missingHtml = data => {
+        const tips = [];
+        if (data.missingA.length) tips.push(`⚠️ 本次考试「<b>${App.esc(exA.name)}</b>」<b>还没有导入这些班的成绩</b>：${data.missingA.map(App.esc).join('、')} —— 这些班在下面的表里会显示「本次未录入」，导入后重新打开本页即可。`);
+        if (data.missingB.length) tips.push(`ℹ️ 对比考试「<b>${App.esc(exB.name)}</b>」里这些班没有成绩：${data.missingB.map(App.esc).join('、')}（对比考试不参加或被删除的班）。`);
+        return tips.length ? `<div class="card" style="border-left:5px solid #e8a33d;background:#fffaf2">
+          <div class="small" style="line-height:1.9">${tips.join('<br>')}</div></div>` : '';
+      };
+
       let body;
       if (exA.id === exB.id) {
         body = `<div class="card"><div class="card-title">📈 成绩进退对比</div>
           <div class="empty" style="padding:26px"><div class="e-ico">⚠️</div><p>「本次考试」与「对比考试」不能是同一场，请在上方重新选择</p></div></div>`;
       } else {
         const data = this.compareData(exA, exB);
-        body = this._cmpSummaryHtml(data) + this._cmpDetailHtml(data);
+        body = missingHtml(data) + this._cmpSummaryHtml(data) + this._cmpDetailHtml(data);
       }
 
       v.innerHTML = `
@@ -3157,8 +3169,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     _cmpSummaryHtml(data) {
       const f1 = x => (x == null ? '—' : App.fmt(x));
-      const fTxt = x => (x == null ? '—' : (x > 0 ? '+' : '') + App.fmt(x));
-      const cls = x => (x == null || x === 0) ? '' : (x > 0 ? ' cmp-up' : ' cmp-down');
+      const nz = x => (x == null ? null : (Math.round(x * 10) / 10 || 0));   // 消除 -0.0
+      const fTxt = x => (x == null ? '—' : (nz(x) > 0 ? '+' : '') + App.fmt(nz(x)));
+      const cls = x => (x == null || nz(x) === 0) ? '' : (nz(x) > 0 ? ' cmp-up' : ' cmp-down');
       const row = (label, st, bold) => {
         const b = x => bold ? `<b>${x}</b>` : x;
         return `<tr${bold ? ' class="row-good"' : ''}>
@@ -3193,8 +3206,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const out = [];
       data.classes.forEach(c => {
         if (!showCls && c.cid !== cur) return;
-        c.rows.forEach((r, i) => out.push({ r: r, cls: c.name, idx: i + 1 }));
+        c.rows.forEach(r => out.push({ r: r, cls: c.name }));
       });
+      // 全部班级：按年级排名全局排序，本次无成绩的排在最后（首屏就会是有数据的班，
+      // 避免「某几个班还没导入」时看到满屏横杠而误以为没有数据）
+      out.sort((a, b) => (a.r.gradeRank ?? 1e9) - (b.r.gradeRank ?? 1e9) ||
+        (a.r.prevGradeRank ?? 1e9) - (b.r.prevGradeRank ?? 1e9) ||
+        String(a.r.no || '').localeCompare(String(b.r.no || '')));
+      out.forEach((o, i) => { o.idx = i + 1; });
       const body = out.map(o => {
         const r = o.r;
         const items = App.ITEM_KEYS.map(k => `<td class="num">${r.items[k] != null ? App.fmt(r.items[k]) : '<span class="muted">—</span>'}</td>`).join('');
@@ -3247,18 +3266,22 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         nz(r.rank), nz(r.prevRank), nz(r.dRank),
         nz(r.gradeRank), nz(r.prevGradeRank), nz(r.dGradeRank), r.note || ''];
 
-      const s1 = [['班级', '参考人数', '本次无成绩', '本次均分', '上次均分（同批学生）', '均分增减', '本次最高分', '进步人数', '退步人数', '名次持平', '无上次成绩'],
+      const tips = [];
+      if (data.missingA.length) tips.push('⚠ 本次考试「' + exA.name + '」还没有导入这些班的成绩：' + data.missingA.join('、') + '（表中显示为「本次未录入」）');
+      if (data.missingB.length) tips.push('ℹ 对比考试「' + exB.name + '」里这些班没有成绩：' + data.missingB.join('、'));
+      const s1 = [...tips.map(t => [t]), ...(tips.length ? [['']] : []),
+        ['班级', '参考人数', '本次无成绩', '本次均分', '上次均分（同批学生）', '均分增减', '本次最高分', '进步人数', '退步人数', '名次持平', '无上次成绩'],
         ...data.classes.map(c => [c.name, c.stat.count, c.stat.absent, dec(c.stat.avgA), dec(c.stat.avgB),
-          c.stat.dAvg == null ? '' : +c.stat.dAvg.toFixed(1), dec(c.stat.maxA), c.stat.up, c.stat.down, c.stat.stay, c.stat.noBase]),
+          c.stat.dAvg == null ? '' : (Math.round(c.stat.dAvg * 10) / 10 || 0), dec(c.stat.maxA), c.stat.up, c.stat.down, c.stat.stay, c.stat.noBase]),
         ['🏆 全年级', data.stat.count, data.stat.absent, dec(data.stat.avgA), dec(data.stat.avgB),
-          data.stat.dAvg == null ? '' : +data.stat.dAvg.toFixed(1), dec(data.stat.maxA), data.stat.up, data.stat.down, data.stat.stay, data.stat.noBase]];
+          data.stat.dAvg == null ? '' : (Math.round(data.stat.dAvg * 10) / 10 || 0), dec(data.stat.maxA), data.stat.up, data.stat.down, data.stat.stay, data.stat.noBase]];
       const sheets = [{ name: '年级汇总', aoa: s1, widths: [10, 10, 8, 10, 18, 10, 11, 10, 10, 10, 12] }];
 
       const allRows = [...data.rows].sort((x, y) => (x.gradeRank ?? 1e9) - (y.gradeRank ?? 1e9) ||
         (x.prevGradeRank ?? 1e9) - (y.prevGradeRank ?? 1e9) || String(x.no || '').localeCompare(String(y.no || '')));
-      sheets.push({ name: '全年级明细', aoa: [HDR, ...allRows.map(rowOf)], widths: W });
+      sheets.push({ name: '全年级明细', aoa: [HDR, ...allRows.map((r, i) => rowOf(r, i + 1))], widths: W });
       data.classes.forEach(c => {
-        sheets.push({ name: c.name, aoa: [HDR, ...c.rows.map(rowOf)], widths: W });
+        sheets.push({ name: c.name, aoa: [HDR, ...c.rows.map((r, i) => rowOf(r, i + 1))], widths: W });
       });
 
       const wb = App.makeWorkbook(sheets);
