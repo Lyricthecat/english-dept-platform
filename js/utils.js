@@ -275,13 +275,22 @@
   /* ---------------- 事件委托 ---------------- */
   // App.delegate(rootEl, {click:{act:fn}, change:{...}, input:{...}}) — fn(e, el)
   App.delegate = (root, maps) => {
-    const bind = (evt, map) => root.addEventListener(evt, e => {
-      const el = e.target.closest('[data-' + (evt === 'click' ? 'act' : evt === 'change' ? 'cact' : 'iact') + ']');
-      if (!el || !root.contains(el)) return;
-      const key = el.dataset[evt === 'click' ? 'act' : evt === 'change' ? 'cact' : 'iact'];
-      const fn = map[key];
-      if (fn) { e.preventDefault(); fn(e, el); }
-    });
+    // 视图每次 render 都会重新调用本函数；同一元素重复 addEventListener 会叠加，
+    // 导致「点一次导出触发 N 次」→ 先解绑上一次绑定的事件
+    if (root.__ejwpBind) root.__ejwpBind.forEach(x => root.removeEventListener(x.evt, x.fn));
+    const bound = [];
+    root.__ejwpBind = bound;
+    const bind = (evt, map) => {
+      const handler = e => {
+        const el = e.target.closest('[data-' + (evt === 'click' ? 'act' : evt === 'change' ? 'cact' : 'iact') + ']');
+        if (!el || !root.contains(el)) return;
+        const key = el.dataset[evt === 'click' ? 'act' : evt === 'change' ? 'cact' : 'iact'];
+        const fn = map[key];
+        if (fn) { e.preventDefault(); fn(e, el); }
+      };
+      bound.push({ evt: evt, fn: handler });
+      root.addEventListener(evt, handler);
+    };
     if (maps.click) bind('click', maps.click);
     if (maps.change) bind('change', maps.change);
     if (maps.input) bind('input', maps.input);
